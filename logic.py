@@ -37,16 +37,22 @@ class StrategyEngine:
     def analyze_holding_health(self, ticker):
         """
         Analyzes Price, RSI, AND LIQUIDITY (Volume).
+        Includes Fix for MultiIndex Data Errors.
         """
         try:
-            # Get Ticker Info for Market Cap (check if it's a micro-cap trap)
-            # Note: Fetching .info can be slow; for a fast demo, we rely on volume.
-            
             # Get History for Price/Vol
             data = yf.download(ticker, period="3mo", progress=False)
-            if data.empty: return 0, 0, 0
+            
+            if data.empty: 
+                return 0.0, 0.0, 0.0
+
+            # --- FIX: FLATTEN MULTI-INDEX COLUMNS ---
+            # If yfinance returns ('Close', 'AAPL'), flatten it to just 'Close'
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
 
             # 1. Price Momentum (3-month run-up)
+            # We wrap in float() to ensure it's a scalar, not a Series
             start_price = float(data['Close'].iloc[0])
             end_price = float(data['Close'].iloc[-1])
             run_up_pct = (end_price - start_price) / start_price
@@ -57,17 +63,19 @@ class StrategyEngine:
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
-            current_rsi = float(rsi.iloc[-1])
+            # Safe scalar extraction
+            current_rsi = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
             
             # 3. Liquidity Check (Avg Daily Dollar Volume)
-            avg_vol = data['Volume'].mean()
-            avg_price = data['Close'].mean()
-            dollar_volume = avg_vol * avg_price # e.g., $50,000,000 traded per day
+            avg_vol = float(data['Volume'].mean())
+            avg_price = float(data['Close'].mean())
+            dollar_volume = avg_vol * avg_price 
             
             return run_up_pct, current_rsi, dollar_volume
 
-        except:
-            return 0, 0, 0
+        except Exception as e:
+            # print(f"Error analyzing {ticker}: {e}") # Debug only
+            return 0.0, 0.0, 0.0
 
     def sanitize_signals(self, fund_ticker):
         """
@@ -94,7 +102,6 @@ class StrategyEngine:
             
             # --- THE "REFLEXIVITY TRAP" FILTER ---
             # TRAP: Stock is up >20%, but trades less than $20M a day.
-            # Rationale: The fund's own buying likely inflated the price.
             is_reflexivity_trap = (run_up > 0.20) and (dollar_vol < 20_000_000)
             
             if is_reflexivity_trap:
