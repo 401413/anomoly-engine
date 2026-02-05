@@ -7,11 +7,11 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 class StrategyEngine:
     def __init__(self):
         self.liquidity_blacklist = ['MSFT', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'BIL', 'SHV', 'CASH_USD']
-        self.analyzer = SentimentIntensityAnalyzer() # For Text/Sound Analysis
+        self.analyzer = SentimentIntensityAnalyzer() 
 
-    # --- HELPERS TO PREVENT ERRORS ---
+    # --- HELPERS ---
     def to_scalar(self, val):
-        """Forces complex data structures into a single float."""
+        """Forces complex data into a single float."""
         try:
             if isinstance(val, (pd.Series, pd.DataFrame)):
                 if val.empty: return 0.0
@@ -22,18 +22,16 @@ class StrategyEngine:
         except: return 0.0
 
     def to_scalar_array(self, series):
-        """Forces complex data structures into a clean 1D Numpy Array."""
+        """Forces complex data into a 1D Numpy Array."""
         try:
-            # If it's a DataFrame (multi-index), take first column
             if isinstance(series, pd.DataFrame):
                 return series.iloc[:, 0].to_numpy()
             return series.to_numpy()
         except:
             return np.array([])
 
-    # --- MODULE 1: PORTFOLIO SANITIZER ---
+    # --- MODULE 1: PORTFOLIO ---
     def get_fund_holdings(self, fund_ticker):
-        print(f"📡 FETCHING {fund_ticker}...")
         try:
             fund = yf.Ticker(fund_ticker)
             holdings_data = fund.funds_data.top_holdings
@@ -51,4 +49,80 @@ class StrategyEngine:
             
             if data.empty: return 0.0, 0.0, 0.0
 
-            # Flatten Multi-Index
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            data = data.loc[:, ~data.columns.duplicated()]
+
+            start = self.to_scalar(data['Close'].iloc[0])
+            end = self.to_scalar(data['Close'].iloc[-1])
+            run_up = (end - start) / start if start != 0 else 0.0
+            
+            delta = data['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs_gain = self.to_scalar(gain.iloc[-1])
+            rs_loss = self.to_scalar(loss.iloc[-1])
+            rsi = 100 - (100 / (1 + (rs_gain / rs_loss))) if rs_loss != 0 else 50.0
+            
+            vol = self.to_scalar(data['Volume'].mean())
+            price = self.to_scalar(data['Close'].mean())
+            dollar_vol = (vol * price) / 1_000_000 
+            
+            return run_up, rsi, dollar_vol
+        except: return 0.0, 0.0, 0.0
+
+    def sanitize_signals(self, fund_ticker):
+        raw = self.get_fund_holdings(fund_ticker)
+        logs = []
+        if not raw: return pd.DataFrame()
+
+        for ticker, weight in raw.items():
+            if "USD" in ticker or "CASH" in ticker: continue
+            
+            if ticker in self.liquidity_blacklist:
+                logs.append({
+                    'Ticker': ticker, 'Weight': weight, 'Status': 'REJECTED', 
+                    'Reason': 'Beta Proxy', 'RSI': 0, 'Return_3M': 0, 'Vol_M': 0
+                })
+                continue
+
+            run_up, rsi, vol_m = self.analyze_holding_health(ticker)
+            
+            is_trap = (run_up > 0.20) and (vol_m < 20) 
+            is_hot = (run_up > 0.30) or (rsi > 75)
+            
+            status = 'APPROVED'
+            reason = 'Clean Signal'
+            if is_trap: status, reason = 'REJECTED', 'Reflexivity Trap'
+            elif is_hot: status, reason = 'REJECTED', 'Overheated'
+
+            logs.append({
+                'Ticker': ticker, 'Weight': weight, 'Status': status, 'Reason': reason,
+                'RSI': round(rsi, 1), 'Return_3M': f"{run_up:.1%}", 'Vol_M': f"${vol_m:.1f}M"
+            })
+            
+        return pd.DataFrame(logs)
+
+    # --- MODULE 2: TEXT ---
+    def analyze_sound_signal(self, text_input):
+        score = self.analyzer.polarity_scores(text_input)
+        compound = score['compound']
+        if compound >= 0.05: return "POSITIVE", compound
+        elif compound <= -0.05: return "NEGATIVE", compound
+        else: return "NEUTRAL", compound
+
+    # --- MODULE 3: WAVES ---
+    def generate_spectrogram_data(self, ticker):
+        try:
+            data = yf.download(ticker.split(" ")[0], period="2y", interval="1d", progress=False)
+            if data.empty: return None, None, None
+
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            
+            prices = self.to_scalar_array(data['Close'])
+            returns = np.diff(prices)
+            
+            f, t, Sxx = signal.spectrogram(returns, fs=1.0, window='hann', nperseg=60, noverlap=50)
+            return f, t, Sxx
+        except: return None, None, None
