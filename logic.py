@@ -111,11 +111,10 @@ class StrategyEngine:
         elif compound <= -0.05: return "NEGATIVE", compound
         else: return "NEUTRAL", compound
 
-# --- MODULE 3: WAVES ---
+    # --- MODULE 3: WAVES (UPDATED) ---
     def generate_spectrogram_data(self, ticker):
         """
-        Performs Fourier Transform on Price Data.
-        Returns: Frequencies (f), Times (t), Intensities (Sxx), AND Raw Prices.
+        Returns: Frequencies (f), Times (t), Intensities (Sxx), AND Prices.
         """
         try:
             # 1. Get History
@@ -128,13 +127,13 @@ class StrategyEngine:
             
             prices = self.to_scalar_array(data['Close'])
             
-            # 3. Detrend for Spectrogram (use Returns)
+            # 3. Detrend
             returns = np.diff(prices)
             
-            # 4. Signal Processing (Short-Time Fourier Transform)
-            # fs=1.0 means '1 Day'. t will be output in 'Days' matching the price index.
+            # 4. Signal Processing
             f, t, Sxx = signal.spectrogram(returns, fs=1.0, window='hann', nperseg=60, noverlap=50)
             
+            # Return 4 values to match app.py expectation
             return f, t, Sxx, prices
             
         except Exception as e:
