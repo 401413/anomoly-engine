@@ -1,116 +1,126 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 class StrategyEngine:
     def __init__(self):
-        # Assets we NEVER want to own because they are just for liquidity/indexing
         self.liquidity_blacklist = ['MSFT', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'BIL', 'SHV', 'CASH_USD']
+        self.analyzer = SentimentIntensityAnalyzer() # For "Sound" Analysis
+
+    def to_scalar(self, val):
+        """Forces data to a single float to prevent errors."""
+        try:
+            if isinstance(val, (pd.Series, pd.DataFrame)):
+                if val.empty: return 0.0
+                return float(val.iloc[0])
+            return float(val)
+        except: return 0.0
 
     def get_fund_holdings(self, fund_ticker):
-        """
-        REAL DATA FETCH:
-        Pulls the Top 10 holdings of a UCITS ETF/Fund from Yahoo Finance.
-        Returns a dictionary: {'TICKER': Weight}
-        """
-        print(f"📡 CONNECTING TO LIVE FEED: Fetching holdings for {fund_ticker}...")
+        # ... (Same as before, keep your existing get_fund_holdings code) ...
+        # For brevity, I am assuming you kept the robust version from the previous step.
+        print(f"📡 FETCHING {fund_ticker}...")
         try:
             fund = yf.Ticker(fund_ticker)
-            # Fetch holdings (structure varies by ETF provider, using yfinance generic)
             holdings_data = fund.funds_data.top_holdings
-            
             clean_holdings = {}
             if holdings_data is not None:
-                # yfinance returns a pandas df; we iterate to build our dict
                 for index, row in holdings_data.iterrows():
-                    ticker_symbol = index 
-                    weight = row['Holding Percent']
-                    clean_holdings[ticker_symbol] = weight
-            
-            print(f"   ✅ FOUND {len(clean_holdings)} HOLDINGS.")
+                    clean_holdings[str(index).strip()] = row['Holding Percent']
             return clean_holdings
-            
-        except Exception as e:
-            print(f"   ❌ ERROR FETCHING HOLDINGS: {e}")
-            return {}
+        except: return {}
 
     def analyze_holding_health(self, ticker):
-        """
-        Analyzes Price, RSI, AND LIQUIDITY (Volume).
-        Includes Fix for MultiIndex Data Errors.
-        """
+        """Returns Metrics AND Data for display."""
         try:
-            # Get History for Price/Vol
+            ticker = ticker.split(" ")[0]
             data = yf.download(ticker, period="3mo", progress=False)
             
-            if data.empty: 
-                return 0.0, 0.0, 0.0
+            if data.empty: return 0.0, 0.0, 0.0
 
-            # --- FIX: FLATTEN MULTI-INDEX COLUMNS ---
-            # If yfinance returns ('Close', 'AAPL'), flatten it to just 'Close'
+            # Flatten Multi-Index
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.get_level_values(0)
+            data = data.loc[:, ~data.columns.duplicated()]
 
-            # 1. Price Momentum (3-month run-up)
-            # We wrap in float() to ensure it's a scalar, not a Series
-            start_price = float(data['Close'].iloc[0])
-            end_price = float(data['Close'].iloc[-1])
-            run_up_pct = (end_price - start_price) / start_price
+            # 1. Metrics
+            start = self.to_scalar(data['Close'].iloc[0])
+            end = self.to_scalar(data['Close'].iloc[-1])
+            run_up = (end - start) / start if start != 0 else 0.0
             
-            # 2. RSI Calculation (14-day)
+            # RSI
             delta = data['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            # Safe scalar extraction
-            current_rsi = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+            rs_gain = self.to_scalar(gain.iloc[-1])
+            rs_loss = self.to_scalar(loss.iloc[-1])
+            rsi = 100 - (100 / (1 + (rs_gain / rs_loss))) if rs_loss != 0 else 50.0
             
-            # 3. Liquidity Check (Avg Daily Dollar Volume)
-            avg_vol = float(data['Volume'].mean())
-            avg_price = float(data['Close'].mean())
-            dollar_volume = avg_vol * avg_price 
+            # Liquidity ($M)
+            vol = self.to_scalar(data['Volume'].mean())
+            price = self.to_scalar(data['Close'].mean())
+            dollar_vol = (vol * price) / 1_000_000 # Convert to Millions
             
-            return run_up_pct, current_rsi, dollar_volume
+            return run_up, rsi, dollar_vol
 
-        except Exception as e:
-            # print(f"Error analyzing {ticker}: {e}") # Debug only
-            return 0.0, 0.0, 0.0
+        except: return 0.0, 0.0, 0.0
 
     def sanitize_signals(self, fund_ticker):
-        """
-        MASTER LOGIC:
-        1. Get Real Holdings
-        2. Filter out Blacklist (Mega Caps)
-        3. Filter out Reflexivity Traps (High Price / Low Vol)
-        """
-        raw_holdings = self.get_fund_holdings(fund_ticker)
-        clean_log = []
+        raw = self.get_fund_holdings(fund_ticker)
+        logs = []
         
-        if not raw_holdings:
-            return pd.DataFrame()
+        if not raw: return pd.DataFrame()
 
-        for ticker, weight in raw_holdings.items():
+        for ticker, weight in raw.items():
+            if "USD" in ticker or "CASH" in ticker: continue
             
-            # A. GENERIC BLACKLIST (Stripping "Beta")
+            # A. BLACKLIST
             if ticker in self.liquidity_blacklist:
-                clean_log.append({'Ticker': ticker, 'Weight': weight, 'Status': 'REJECTED', 'Reason': 'Index/Beta Proxy'})
+                logs.append({
+                    'Ticker': ticker, 'Weight': weight, 'Status': 'REJECTED', 
+                    'Reason': 'Beta Proxy', 
+                    'RSI': 0, 'Return_3M': 0, 'Vol_M': 0 # Placeholders
+                })
                 continue
+
+            # B. ANALYSIS
+            run_up, rsi, vol_m = self.analyze_holding_health(ticker)
             
-            # B. DEEP DIVE (Price + Liquidity)
-            run_up, rsi, dollar_vol = self.analyze_holding_health(ticker)
+            # Logic
+            is_trap = (run_up > 0.20) and (vol_m < 20) # <$20M daily vol
+            is_hot = (run_up > 0.30) or (rsi > 75)
             
-            # --- THE "REFLEXIVITY TRAP" FILTER ---
-            # TRAP: Stock is up >20%, but trades less than $20M a day.
-            is_reflexivity_trap = (run_up > 0.20) and (dollar_vol < 20_000_000)
+            status = 'APPROVED'
+            reason = 'Clean Signal'
             
-            if is_reflexivity_trap:
-                 clean_log.append({'Ticker': ticker, 'Weight': weight, 'Status': 'REJECTED', 'Reason': '⚠️ Reflexivity Trap (Low Liquidity Run-up)'})
+            if is_trap:
+                status = 'REJECTED'
+                reason = 'Reflexivity Trap'
+            elif is_hot:
+                status = 'REJECTED'
+                reason = 'Overheated'
+
+            logs.append({
+                'Ticker': ticker, 
+                'Weight': weight, 
+                'Status': status, 
+                'Reason': reason,
+                'RSI': round(rsi, 1),
+                'Return_3M': f"{run_up:.1%}",
+                'Vol_M': f"${vol_m:.1f}M"
+            })
             
-            elif run_up > 0.30 or rsi > 75:
-                 clean_log.append({'Ticker': ticker, 'Weight': weight, 'Status': 'REJECTED', 'Reason': 'Overheated (Mean Reversion Risk)'})
-                 
-            else:
-                clean_log.append({'Ticker': ticker, 'Weight': weight, 'Status': 'APPROVED', 'Reason': 'Clean Alpha Signal'})
-            
-        return pd.DataFrame(clean_log)
+        return pd.DataFrame(logs)
+
+    def analyze_sound_signal(self, text_input):
+        """
+        Analyzes the 'Sound' (Text Sentiment) of a CEO Statement/News.
+        Positive Score > 0.05 = Buy Signal.
+        """
+        score = self.analyzer.polarity_scores(text_input)
+        compound = score['compound']
+        
+        if compound >= 0.05: return "POSITIVE", compound
+        elif compound <= -0.05: return "NEGATIVE", compound
+        else: return "NEUTRAL", compound
