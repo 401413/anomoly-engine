@@ -64,33 +64,87 @@ with tab2:
         elif signal == "NEGATIVE":
             st.error("⚠️ **BEARISH:** Detected hedging/negative language.")
 
-# --- TAB 3 ---
+# --- TAB 3: SPECTRAL WAVES ---
 with tab3:
     st.header("Financial Signal Processing (DSP)")
     st.markdown("Visualizing Price History as a **Sound Wave**. We search for 'Resonance'—where hidden frequency energy builds up before a move.")
     
-    spec_ticker = st.text_input("Analyze Ticker Waveform", value="NVDA")
+    col_input, col_style = st.columns([3, 1])
+    spec_ticker = col_input.text_input("Analyze Ticker Waveform", value="NVDA")
+    chart_style = col_style.selectbox("Chart Style", ["Overlay (Dual Axis)", "Stacked (Separate)"])
     
     if st.button("Generate Spectrogram"):
         with st.spinner("Decomposing Price Waves (FFT)..."):
-            f, t, Sxx = engine.generate_spectrogram_data(spec_ticker)
+            # Note: We now unpack 4 values, including 'prices'
+            f, t, Sxx, prices = engine.generate_spectrogram_data(spec_ticker)
             
             if Sxx is not None:
-                fig = go.Figure(data=go.Heatmap(
-                    z=10 * np.log10(Sxx + 1e-10),
-                    x=t, y=f,
+                # Create the Figure
+                fig = go.Figure()
+
+                # TRACE 1: The Heatmap (Spectrogram)
+                # We plot this FIRST so it stays in the background
+                fig.add_trace(go.Heatmap(
+                    z=10 * np.log10(Sxx + 1e-10), # Decibels
+                    x=t, 
+                    y=f,
                     colorscale='Magma',
-                    colorbar=dict(title='Energy (dB)')
+                    colorbar=dict(title='Energy (dB)', x=1.1), # Move colorbar to far right
+                    name='Spectral Density'
                 ))
+
+                # TRACE 2: The Price Line (Overlay)
+                # We create a simple index array [0, 1, 2...] for the price x-axis
+                # This aligns with 't' which is also in "days from start"
+                price_x = np.arange(len(prices))
                 
-                fig.update_layout(
-                    title=f"Spectral Density Map: {spec_ticker}",
-                    xaxis_title="Time (Days)",
-                    yaxis_title="Frequency (Cycles)",
-                    height=500
-                )
+                # Logic for Chart Style
+                if chart_style == "Overlay (Dual Axis)":
+                    fig.add_trace(go.Scatter(
+                        x=price_x, 
+                        y=prices, 
+                        mode='lines',
+                        line=dict(color='cyan', width=2), # Cyan pops against dark Magma
+                        name='Price Action',
+                        yaxis='y2' # Assign to secondary Y-axis
+                    ))
+                    
+                    # Update Layout for Dual Axis
+                    fig.update_layout(
+                        title=f"Spectral Density Map + Price: {spec_ticker}",
+                        xaxis_title="Time (Days)",
+                        yaxis=dict(title="Frequency (Cycles)", side="left"),
+                        yaxis2=dict(
+                            title="Price ($)", 
+                            side="right", 
+                            overlaying="y", # This creates the overlay
+                            showgrid=False  # Hide grid lines for price to keep heatmap clean
+                        ),
+                        height=600,
+                        legend=dict(x=0, y=1.1, orientation="h")
+                    )
+                    
+                else: # Stacked View (Subplot simulation via distinct domains)
+                    # For a true stacked view in Plotly without 'make_subplots', 
+                    # it's often cleaner to just render the line chart overlay but keep ranges distinct.
+                    # Or simpler: Just render the line normally.
+                     fig.add_trace(go.Scatter(
+                        x=price_x, 
+                        y=prices, 
+                        mode='lines',
+                        line=dict(color='white', width=2),
+                        name='Price Action',
+                        yaxis='y2'
+                    ))
+                     fig.update_layout(
+                        title=f"Price vs. Frequency: {spec_ticker}",
+                        yaxis=dict(title="Frequency", domain=[0, 0.7]), # Bottom 70%
+                        yaxis2=dict(title="Price", domain=[0.75, 1], overlaying=None), # Top 25%
+                        height=700
+                     )
+
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.info("💡 **Interpretation:** Look for 'Dark Pockets' at the top (High Freq noise dying down) while the bottom (Low Freq trend) remains bright. This 'Quiet Accumulation' often precedes a breakout.")
+                st.info("💡 **Interpretation:** The **Cyan Line** is the price. Look for moments where the price is flat or dipping, but the **Bottom of the Heatmap** (Low Freq) is glowing bright orange. This divergence often signals institutional accumulation.")
             else:
                 st.error("Could not generate wave data. Try a liquid stock.")
