@@ -111,18 +111,32 @@ class StrategyEngine:
         elif compound <= -0.05: return "NEGATIVE", compound
         else: return "NEUTRAL", compound
 
-    # --- MODULE 3: WAVES ---
+# --- MODULE 3: WAVES ---
     def generate_spectrogram_data(self, ticker):
+        """
+        Performs Fourier Transform on Price Data.
+        Returns: Frequencies (f), Times (t), Intensities (Sxx), AND Raw Prices.
+        """
         try:
+            # 1. Get History
             data = yf.download(ticker.split(" ")[0], period="2y", interval="1d", progress=False)
-            if data.empty: return None, None, None
+            if data.empty: return None, None, None, None
 
+            # 2. Clean & Flatten
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.get_level_values(0)
             
             prices = self.to_scalar_array(data['Close'])
+            
+            # 3. Detrend for Spectrogram (use Returns)
             returns = np.diff(prices)
             
+            # 4. Signal Processing (Short-Time Fourier Transform)
+            # fs=1.0 means '1 Day'. t will be output in 'Days' matching the price index.
             f, t, Sxx = signal.spectrogram(returns, fs=1.0, window='hann', nperseg=60, noverlap=50)
-            return f, t, Sxx
-        except: return None, None, None
+            
+            return f, t, Sxx, prices
+            
+        except Exception as e:
+            print(f"Spectrogram Error: {e}")
+            return None, None, None, None
