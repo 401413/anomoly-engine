@@ -1,8 +1,8 @@
-import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from logic import StrategyEngine
+from scipy import signal
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="Alpha Engine", layout="wide", page_icon="⚡")
