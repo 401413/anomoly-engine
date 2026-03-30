@@ -3,7 +3,9 @@ import pandas as pd
 import numpy as np
 from scipy import signal
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from plotly.subplots import make_subplots
+
+class StrategyEngine:
+    def __init__(self):
 
 st.set_page_config(page_title="Alpha Engine", layout="wide", page_icon="⚡")
 
