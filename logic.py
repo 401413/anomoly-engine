@@ -27,6 +27,27 @@ class StrategyEngine:
             return series.to_numpy()
         except: return np.array([])
 
+    def add_technical_indicators(self, df):
+        """Calculates institutional RSI (14) and MACD (12,26,9)"""
+        if df.empty or len(df) < 30:
+            return df
+            
+        # 1. Calculate RSI (14-period using Wilder's Smoothing)
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+
+        # 2. Calculate MACD (12, 26, 9)
+        ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
+        ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = ema_12 - ema_26
+        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+
+        return df
+
     # --- MODULE 1: PORTFOLIO ---
     def get_fund_holdings(self, fund_ticker):
         try:
