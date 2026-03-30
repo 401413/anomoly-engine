@@ -17,7 +17,7 @@ st.markdown("""
 engine = StrategyEngine()
 
 st.title("⚡ Systematic Alpha Engine")
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Portfolio", "🎙️ Sentiment", "🌊 Spectral & History", "📉 Options (Illiquid)"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Portfolio", "🎙️ Sentiment", "🌊 Spectral & Momentum", "📉 Options (Illiquid)"])
 
 # --- TAB 1: PORTFOLIO ---
 with tab1:
@@ -40,7 +40,7 @@ with tab2:
 
 # --- TAB 3: SPECTRAL & HISTORY ---
 with tab3:
-    st.header("Spectral Density & Momentum")
+    st.header("Spectral Density & Momentum Signals")
     spec_ticker = st.text_input("Ticker Symbol", value="NVDA")
     
     if st.button("Generate Wave"):
@@ -49,7 +49,6 @@ with tab3:
             
             if Sxx is not None:
                 # --- CALCULATE MACD & RSI ---
-                # Build a dataframe using the exact price data returned by the engine
                 df_tech = pd.DataFrame({'Close': prices}, index=price_dates)
                 
                 # 1. Calculate RSI (14-period Wilder's Smoothing)
@@ -66,6 +65,20 @@ with tab3:
                 df_tech['MACD_Signal'] = df_tech['MACD'].ewm(span=9, adjust=False).mean()
                 df_tech['MACD_Hist'] = df_tech['MACD'] - df_tech['MACD_Signal']
                 
+                # --- CALCULATE TRAFFIC LIGHT SIGNALS ---
+                df_tech['MACD_Prev'] = df_tech['MACD'].shift(1)
+                df_tech['Signal_Prev'] = df_tech['MACD_Signal'].shift(1)
+
+                # Find exact crossover points
+                cross_up = (df_tech['MACD'] > df_tech['MACD_Signal']) & (df_tech['MACD_Prev'] <= df_tech['Signal_Prev'])
+                cross_down = (df_tech['MACD'] < df_tech['MACD_Signal']) & (df_tech['MACD_Prev'] >= df_tech['Signal_Prev'])
+
+                # Filter by RSI strength
+                buy_strong = df_tech[cross_up & (df_tech['RSI'] <= 50)]
+                buy_weak = df_tech[cross_up & (df_tech['RSI'] > 50)]
+                sell_strong = df_tech[cross_down & (df_tech['RSI'] >= 50)]
+                sell_weak = df_tech[cross_down & (df_tech['RSI'] < 50)]
+                
                 # --- BUILD THE 4-ROW SUBPLOT ---
                 fig = make_subplots(
                     rows=4, cols=1, 
@@ -78,7 +91,7 @@ with tab3:
                         [{"secondary_y": False}], # Row 3: MACD
                         [{"secondary_y": False}]  # Row 4: RSI
                     ],
-                    subplot_titles=("Spectral Density & Price", "Historical Volatility (30D)", "MACD (12, 26, 9)", "RSI (14)")
+                    subplot_titles=("Spectral Density, Price & Signals", "Historical Volatility (30D)", "MACD (12, 26, 9)", "RSI (14)")
                 )
                 
                 # Row 1: Heatmap
@@ -87,6 +100,20 @@ with tab3:
                 # Row 1: Price (Secondary Y)
                 fig.add_trace(go.Scatter(x=price_dates, y=prices, line=dict(color='cyan', width=2), name='Price'), row=1, col=1, secondary_y=True)
                 
+                # Row 1: Traffic Light Signals (Overlaid on Price)
+                # Green Up (Strong Buy)
+                fig.add_trace(go.Scatter(x=buy_strong.index, y=buy_strong['Close'], mode='markers', name='Strong Buy',
+                                         marker=dict(symbol='triangle-up', size=16, color='#00ff00', line=dict(width=1, color='black'))), row=1, col=1, secondary_y=True)
+                # Amber Up (Weak Buy)
+                fig.add_trace(go.Scatter(x=buy_weak.index, y=buy_weak['Close'], mode='markers', name='Weak Buy',
+                                         marker=dict(symbol='triangle-up', size=12, color='#ffbf00', line=dict(width=1, color='black'))), row=1, col=1, secondary_y=True)
+                # Red Down (Strong Sell)
+                fig.add_trace(go.Scatter(x=sell_strong.index, y=sell_strong['Close'], mode='markers', name='Strong Sell',
+                                         marker=dict(symbol='triangle-down', size=16, color='#ff0000', line=dict(width=1, color='black'))), row=1, col=1, secondary_y=True)
+                # Amber Down (Weak Sell)
+                fig.add_trace(go.Scatter(x=sell_weak.index, y=sell_weak['Close'], mode='markers', name='Weak Sell',
+                                         marker=dict(symbol='triangle-down', size=12, color='#ffbf00', line=dict(width=1, color='black'))), row=1, col=1, secondary_y=True)
+
                 # Row 2: Historical Volatility
                 fig.add_trace(go.Scatter(x=price_dates, y=hist_vol*100, line=dict(color='#ff5e5e'), name='Hist Vol', fill='tozeroy'), row=2, col=1)
                 
@@ -104,7 +131,8 @@ with tab3:
                 # Formatting and Layout Update
                 fig.update_layout(
                     height=1000, 
-                    showlegend=False, 
+                    showlegend=True, 
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     template="plotly_dark", 
                     margin=dict(l=40, r=40, t=40, b=40)
                 )
@@ -114,7 +142,7 @@ with tab3:
                 fig.update_yaxes(title_text="Price ($)", row=1, col=1, secondary_y=True)
                 fig.update_yaxes(title_text="Vol (%)", row=2, col=1)
                 fig.update_yaxes(title_text="MACD", row=3, col=1)
-                fig.update_yaxes(title_text="RSI", range=[0, 100], row=4, col=1) # Locks RSI cleanly between 0-100
+                fig.update_yaxes(title_text="RSI", range=[0, 100], row=4, col=1)
                 
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -144,7 +172,6 @@ with tab4:
                 st.divider()
                 
                 # 2. Visualizing the Spread
-                # Simple Bar Chart comparing IV vs HV
                 fig_vol = go.Figure()
                 fig_vol.add_trace(go.Bar(name='Implied Vol (Fear)', x=['Volatility'], y=[data['IV']], marker_color='#ff5e5e')) # Red
                 fig_vol.add_trace(go.Bar(name='Realized Vol (Reality)', x=['Volatility'], y=[data['HV']], marker_color='cyan')) # Cyan
