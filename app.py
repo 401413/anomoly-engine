@@ -73,6 +73,49 @@ with tab3:
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.error(f"Could not generate data for {spec_ticker}. History too short or data error.")
+# Assuming you already fetched 'df' from yfinance here
+# 1. Run the data through our new calculator
+df = engine.add_technical_indicators(df)
+
+# 2. Create a 4-Row Subplot
+fig = make_subplots(
+    rows=4, cols=1, 
+    shared_xaxes=True,
+    vertical_spacing=0.05,
+    row_heights=[0.4, 0.3, 0.15, 0.15], # Allocates space: Price, Spectrogram, MACD, RSI
+    subplot_titles=("Historical Price & Volatility", "Volume Spectrogram", "MACD (12, 26, 9)", "RSI (14)")
+)
+
+# --- ROW 1: Your Existing Price/Volatility Chart ---
+fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close Price', line=dict(color='white')), row=1, col=1)
+# (Add any other Row 1 traces you currently have here)
+
+# --- ROW 2: Your Existing Spectrogram ---
+# (Add your go.Heatmap trace here on row=2, col=1)
+
+# --- ROW 3: MACD ---
+# MACD Histogram uses colors: Green if positive, Red if negative
+colors = ['#2ca02c' if val >= 0 else '#d62728' for val in df['MACD_Hist']]
+fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], marker_color=colors, name='MACD Hist'), row=3, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#1f77b4', width=2), name='MACD'), row=3, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], line=dict(color='#ff7f0e', width=1.5), name='Signal'), row=3, col=1)
+
+# --- ROW 4: RSI ---
+fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#9467bd', width=2), name='RSI'), row=4, col=1)
+# Add Overbought (70) and Oversold (30) reference lines
+fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
+fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
+
+# Update layout for a dark, professional aesthetic
+fig.update_layout(
+    height=1000, # Increased height to fit all 4 charts cleanly
+    template="plotly_dark",
+    showlegend=False,
+    margin=dict(l=40, r=40, t=40, b=40)
+)
+fig.update_yaxes(range=[0, 100], row=4, col=1) # Lock RSI Y-axis to 0-100
+
+st.plotly_chart(fig, use_container_width=True)
 
 # --- TAB 4: OPTIONS (ILLIQUID FOCUS) ---
 with tab4:
