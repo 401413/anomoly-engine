@@ -38,84 +38,87 @@ with tab2:
         sig, score = engine.analyze_sound_signal(txt)
         st.metric("Signal", sig, f"{score:.2f}")
 
-# --- TAB 3: SPECTRAL ---
+# --- TAB 3: SPECTRAL & HISTORY ---
 with tab3:
-    st.header("Spectral Density")
+    st.header("Spectral Density & Momentum")
     spec_ticker = st.text_input("Ticker Symbol", value="NVDA")
+    
     if st.button("Generate Wave"):
         with st.spinner("Calculating..."):
             f, spec_dates, Sxx, price_dates, prices, hist_vol = engine.generate_spectrogram_data(spec_ticker)
             
             if Sxx is not None:
-                # Explicit subplot definitions
+                # --- CALCULATE MACD & RSI ---
+                # Build a dataframe using the exact price data returned by the engine
+                df_tech = pd.DataFrame({'Close': prices}, index=price_dates)
+                
+                # 1. Calculate RSI (14-period Wilder's Smoothing)
+                delta = df_tech['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                rs = gain / loss
+                df_tech['RSI'] = 100 - (100 / (1 + rs))
+
+                # 2. Calculate MACD (12, 26, 9)
+                ema_12 = df_tech['Close'].ewm(span=12, adjust=False).mean()
+                ema_26 = df_tech['Close'].ewm(span=26, adjust=False).mean()
+                df_tech['MACD'] = ema_12 - ema_26
+                df_tech['MACD_Signal'] = df_tech['MACD'].ewm(span=9, adjust=False).mean()
+                df_tech['MACD_Hist'] = df_tech['MACD'] - df_tech['MACD_Signal']
+                
+                # --- BUILD THE 4-ROW SUBPLOT ---
                 fig = make_subplots(
-                    rows=2, cols=1, 
+                    rows=4, cols=1, 
                     shared_xaxes=True, 
-                    row_heights=[0.7, 0.3], 
-                    vertical_spacing=0.05,
-                    specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+                    row_heights=[0.4, 0.2, 0.2, 0.2], 
+                    vertical_spacing=0.04,
+                    specs=[
+                        [{"secondary_y": True}],  # Row 1: Spectrogram & Price
+                        [{"secondary_y": False}], # Row 2: Volatility
+                        [{"secondary_y": False}], # Row 3: MACD
+                        [{"secondary_y": False}]  # Row 4: RSI
+                    ],
+                    subplot_titles=("Spectral Density & Price", "Historical Volatility (30D)", "MACD (12, 26, 9)", "RSI (14)")
                 )
                 
-                # 1. Heatmap
-                fig.add_trace(go.Heatmap(z=10*np.log10(Sxx+1e-10), x=spec_dates, y=f, colorscale='Magma', colorbar=dict(x=1.05)), row=1, col=1)
+                # Row 1: Heatmap
+                fig.add_trace(go.Heatmap(z=10*np.log10(Sxx+1e-10), x=spec_dates, y=f, colorscale='Magma', colorbar=dict(x=1.05, title="Power")), row=1, col=1)
                 
-                # 2. Price (Secondary Y)
+                # Row 1: Price (Secondary Y)
                 fig.add_trace(go.Scatter(x=price_dates, y=prices, line=dict(color='cyan', width=2), name='Price'), row=1, col=1, secondary_y=True)
                 
-                # 3. Volatility (Row 2 - Separate)
-                fig.add_trace(go.Scatter(x=price_dates, y=hist_vol*100, line=dict(color='#ff5e5e'), name='Hist Vol (30D)', fill='tozeroy'), row=2, col=1)
+                # Row 2: Historical Volatility
+                fig.add_trace(go.Scatter(x=price_dates, y=hist_vol*100, line=dict(color='#ff5e5e'), name='Hist Vol', fill='tozeroy'), row=2, col=1)
                 
-                fig.update_layout(height=700, showlegend=False)
+                # Row 3: MACD
+                colors = ['#2ca02c' if val >= 0 else '#d62728' for val in df_tech['MACD_Hist']]
+                fig.add_trace(go.Bar(x=df_tech.index, y=df_tech['MACD_Hist'], marker_color=colors, name='MACD Hist'), row=3, col=1)
+                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD'], line=dict(color='#1f77b4', width=2), name='MACD'), row=3, col=1)
+                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD_Signal'], line=dict(color='#ff7f0e', width=1.5), name='Signal'), row=3, col=1)
+
+                # Row 4: RSI
+                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['RSI'], line=dict(color='#9467bd', width=2), name='RSI'), row=4, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
+                
+                # Formatting and Layout Update
+                fig.update_layout(
+                    height=1000, 
+                    showlegend=False, 
+                    template="plotly_dark", 
+                    margin=dict(l=40, r=40, t=40, b=40)
+                )
+                
+                # Lock Axis Titles and Limits
                 fig.update_yaxes(title_text="Frequency", row=1, col=1, secondary_y=False)
                 fig.update_yaxes(title_text="Price ($)", row=1, col=1, secondary_y=True)
                 fig.update_yaxes(title_text="Vol (%)", row=2, col=1)
+                fig.update_yaxes(title_text="MACD", row=3, col=1)
+                fig.update_yaxes(title_text="RSI", range=[0, 100], row=4, col=1) # Locks RSI cleanly between 0-100
                 
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.error(f"Could not generate data for {spec_ticker}. History too short or data error.")
-# Assuming you already fetched 'df' from yfinance here
-# 1. Run the data through our new calculator
-df = engine.add_technical_indicators(df)
-
-# 2. Create a 4-Row Subplot
-fig = make_subplots(
-    rows=4, cols=1, 
-    shared_xaxes=True,
-    vertical_spacing=0.05,
-    row_heights=[0.4, 0.3, 0.15, 0.15], # Allocates space: Price, Spectrogram, MACD, RSI
-    subplot_titles=("Historical Price & Volatility", "Volume Spectrogram", "MACD (12, 26, 9)", "RSI (14)")
-)
-
-# --- ROW 1: Your Existing Price/Volatility Chart ---
-fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close Price', line=dict(color='white')), row=1, col=1)
-# (Add any other Row 1 traces you currently have here)
-
-# --- ROW 2: Your Existing Spectrogram ---
-# (Add your go.Heatmap trace here on row=2, col=1)
-
-# --- ROW 3: MACD ---
-# MACD Histogram uses colors: Green if positive, Red if negative
-colors = ['#2ca02c' if val >= 0 else '#d62728' for val in df['MACD_Hist']]
-fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], marker_color=colors, name='MACD Hist'), row=3, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#1f77b4', width=2), name='MACD'), row=3, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], line=dict(color='#ff7f0e', width=1.5), name='Signal'), row=3, col=1)
-
-# --- ROW 4: RSI ---
-fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#9467bd', width=2), name='RSI'), row=4, col=1)
-# Add Overbought (70) and Oversold (30) reference lines
-fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
-fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
-
-# Update layout for a dark, professional aesthetic
-fig.update_layout(
-    height=1000, # Increased height to fit all 4 charts cleanly
-    template="plotly_dark",
-    showlegend=False,
-    margin=dict(l=40, r=40, t=40, b=40)
-)
-fig.update_yaxes(range=[0, 100], row=4, col=1) # Lock RSI Y-axis to 0-100
-
-st.plotly_chart(fig, use_container_width=True)
 
 # --- TAB 4: OPTIONS (ILLIQUID FOCUS) ---
 with tab4:
