@@ -1,224 +1,163 @@
-import yfinance as yf
+import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy import signal
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import plotly.graph_objects as go
+from logic import StrategyEngine
+from plotly.subplots import make_subplots
 
-class StrategyEngine:
-    def __init__(self):
-        # REMOVED the "Liquidity Blacklist" so you can scan ANYTHING (IREN, WULF, etc.)
-        self.analyzer = SentimentIntensityAnalyzer() 
+st.set_page_config(page_title="Alpha Engine", layout="wide", page_icon="⚡")
 
-    # --- HELPERS ---
-    def to_scalar(self, val):
-        try:
-            if isinstance(val, (pd.Series, pd.DataFrame)):
-                if val.empty: return 0.0
-                return float(val.iloc[0])
-            if isinstance(val, (np.ndarray, np.generic)):
-                return float(val.item())
-            return float(val)
-        except: return 0.0
+st.markdown("""
+<style>
+    .stDataFrame {border: 1px solid #444;}
+    .metric-card {background-color: #0E1117; border: 1px solid #303030; padding: 15px;}
+</style>
+""", unsafe_allow_html=True)
 
-    def to_scalar_array(self, series):
-        try:
-            if isinstance(series, pd.DataFrame):
-                return series.iloc[:, 0].to_numpy()
-            return series.to_numpy()
-        except: return np.array([])
+engine = StrategyEngine()
 
-    def add_technical_indicators(self, df):
-        """Calculates institutional RSI (14) and MACD (12,26,9)"""
-        if df.empty or len(df) < 30:
-            return df
-            
-        # 1. Calculate RSI (14-period using Wilder's Smoothing)
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+st.title("⚡ Systematic Alpha Engine")
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Portfolio", "🎙️ Sentiment", "🌊 Spectral & History", "📉 Options (Illiquid)"])
 
-        # 2. Calculate MACD (12, 26, 9)
-        ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
-        ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = ema_12 - ema_26
-        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+# --- TAB 1: PORTFOLIO ---
+with tab1:
+    st.header("Reflexivity Filter")
+    target_fund = st.text_input("UCITS Ticker", value="ICLN")
+    if st.button("Run Scan"):
+        with st.spinner("Scanning..."):
+            df = engine.sanitize_signals(target_fund)
+            if not df.empty:
+                st.dataframe(df)
+            else: st.error("No holdings found.")
 
-        return df
+# --- TAB 2: SENTIMENT ---
+with tab2:
+    st.header("Sentiment Analysis")
+    txt = st.text_area("Text", value="Growth is strong.")
+    if st.button("Analyze"):
+        sig, score = engine.analyze_sound_signal(txt)
+        st.metric("Signal", sig, f"{score:.2f}")
 
-    # --- MODULE 1: PORTFOLIO ---
-    def get_fund_holdings(self, fund_ticker):
-        try:
-            fund = yf.Ticker(fund_ticker)
-            holdings_data = fund.funds_data.top_holdings
-            clean_holdings = {}
-            if holdings_data is not None:
-                for index, row in holdings_data.iterrows():
-                    clean_holdings[str(index).strip()] = row['Holding Percent']
-            return clean_holdings
-        except: return {}
+# --- TAB 3: SPECTRAL & HISTORY ---
+with tab3:
+    st.header("Spectral Density & Momentum")
+    spec_ticker = st.text_input("Ticker Symbol", value="NVDA")
+    
+    if st.button("Generate Wave"):
+        with st.spinner("Calculating..."):
+            f, spec_dates, Sxx, price_dates, prices, hist_vol = engine.generate_spectrogram_data(spec_ticker)
+            
+            if Sxx is not None:
+                # --- CALCULATE MACD & RSI ---
+                # We build a temporary DataFrame using the exact price data returned by the engine
+                df_tech = pd.DataFrame({'Close': prices}, index=price_dates)
+                
+                # 1. Calculate RSI (14-period Wilder's Smoothing)
+                delta = df_tech['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                rs = gain / loss
+                df_tech['RSI'] = 100 - (100 / (1 + rs))
 
-    def analyze_holding_health(self, ticker):
-        try:
-            clean_ticker = ticker.split(" ")[0]
-            # Use 'max' for small caps to ensure we get data even if gaps exist
-            data = yf.download(clean_ticker, period="6mo", progress=False)
-            if data.empty: return 0.0, 0.0, 0.0
-            
-            if isinstance(data.columns, pd.MultiIndex): 
-                data.columns = data.columns.get_level_values(0)
-            data = data.loc[:, ~data.columns.duplicated()]
+                # 2. Calculate MACD (12, 26, 9)
+                ema_12 = df_tech['Close'].ewm(span=12, adjust=False).mean()
+                ema_26 = df_tech['Close'].ewm(span=26, adjust=False).mean()
+                df_tech['MACD'] = ema_12 - ema_26
+                df_tech['MACD_Signal'] = df_tech['MACD'].ewm(span=9, adjust=False).mean()
+                df_tech['MACD_Hist'] = df_tech['MACD'] - df_tech['MACD_Signal']
+                
+                # --- BUILD THE 4-ROW SUBPLOT ---
+                fig = make_subplots(
+                    rows=4, cols=1, 
+                    shared_xaxes=True, 
+                    row_heights=[0.4, 0.2, 0.2, 0.2], 
+                    vertical_spacing=0.04,
+                    specs=[
+                        [{"secondary_y": True}],  # Row 1: Spectrogram & Price
+                        [{"secondary_y": False}], # Row 2: Volatility
+                        [{"secondary_y": False}], # Row 3: MACD
+                        [{"secondary_y": False}]  # Row 4: RSI
+                    ],
+                    subplot_titles=("Spectral Density & Price", "Historical Volatility (30D)", "MACD (12, 26, 9)", "RSI (14)")
+                )
+                
+                # Row 1: Heatmap
+                fig.add_trace(go.Heatmap(z=10*np.log10(Sxx+1e-10), x=spec_dates, y=f, colorscale='Magma', colorbar=dict(x=1.05, title="Power")), row=1, col=1)
+                
+                # Row 1: Price (Secondary Y)
+                fig.add_trace(go.Scatter(x=price_dates, y=prices, line=dict(color='cyan', width=2), name='Price'), row=1, col=1, secondary_y=True)
+                
+                # Row 2: Historical Volatility
+                fig.add_trace(go.Scatter(x=price_dates, y=hist_vol*100, line=dict(color='#ff5e5e'), name='Hist Vol', fill='tozeroy'), row=2, col=1)
+                
+                # Row 3: MACD
+                colors = ['#2ca02c' if val >= 0 else '#d62728' for val in df_tech['MACD_Hist']]
+                fig.add_trace(go.Bar(x=df_tech.index, y=df_tech['MACD_Hist'], marker_color=colors, name='MACD Hist'), row=3, col=1)
+                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD'], line=dict(color='#1f77b4', width=2), name='MACD'), row=3, col=1)
+                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['MACD_Signal'], line=dict(color='#ff7f0e', width=1.5), name='Signal'), row=3, col=1)
 
-            start = self.to_scalar(data['Close'].iloc[0])
-            end = self.to_scalar(data['Close'].iloc[-1])
-            run_up = (end - start) / start if start != 0 else 0.0
-            
-            delta = data['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            rs_gain = self.to_scalar(gain.iloc[-1])
-            rs_loss = self.to_scalar(loss.iloc[-1])
-            rsi = 100 - (100 / (1 + (rs_gain / rs_loss))) if rs_loss != 0 else 50.0
-            
-            vol = self.to_scalar(data['Volume'].mean())
-            price = self.to_scalar(data['Close'].mean())
-            dollar_vol = (vol * price) / 1_000_000 
-            
-            return run_up, rsi, dollar_vol
-        except: return 0.0, 0.0, 0.0
-
-    def sanitize_signals(self, fund_ticker):
-        raw = self.get_fund_holdings(fund_ticker)
-        logs = []
-        if not raw: return pd.DataFrame()
-        for ticker, weight in raw.items():
-            if "USD" in ticker: continue
-            
-            run_up, rsi, vol_m = self.analyze_holding_health(ticker)
-            
-            # Simplified Logic: High RSI = Overheated, High Mom/Low Vol = Trap
-            is_trap = (run_up > 0.20 and vol_m < 20)
-            is_hot = (run_up > 0.30 or rsi > 75)
-            
-            status, reason = ('REJECTED', 'Reflexivity Trap') if is_trap else ('REJECTED', 'Overheated') if is_hot else ('APPROVED', 'Clean Signal')
-            
-            logs.append({'Ticker': ticker, 'Weight': weight, 'Status': status, 'Reason': reason, 'RSI': round(rsi, 1), 'Return_3M': f"{run_up:.1%}", 'Vol_M': f"${vol_m:.1f}M"})
-        return pd.DataFrame(logs)
-
-    # --- MODULE 2: TEXT ---
-    def analyze_sound_signal(self, text_input):
-        score = self.analyzer.polarity_scores(text_input)
-        compound = score['compound']
-        return ("POSITIVE" if compound >= 0.05 else "NEGATIVE" if compound <= -0.05 else "NEUTRAL"), compound
-
-    # --- MODULE 3: WAVES ---
-    def generate_spectrogram_data(self, ticker):
-        try:
-            clean_ticker = ticker.split(" ")[0].upper()
-            data = yf.download(clean_ticker, period="2y", interval="1d", progress=False)
-            
-            if data.empty: 
-                data = yf.download(clean_ticker, period="max", interval="1d", progress=False)
-            
-            # Less strict data check (allow for shorter history)
-            if data.empty or len(data) < 30: return None, None, None, None, None, None
-
-            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-            
-            prices = self.to_scalar_array(data['Close'])
-            price_dates = data.index
-            
-            returns = np.diff(prices)
-            returns_dates = price_dates[1:] 
-            
-            n_per_seg = 60 if len(returns) > 100 else 10 # Adaptive window
-            f, t, Sxx = signal.spectrogram(returns, fs=1.0, window='hann', nperseg=n_per_seg, noverlap=int(n_per_seg/2))
-            
-            t_indices = np.floor(t).astype(int)
-            t_indices = np.clip(t_indices, 0, len(returns_dates) - 1)
-            spec_dates = returns_dates[t_indices]
-            
-            # ALIGNMENT
-            start_date = spec_dates[0]
-            mask = price_dates >= start_date
-            aligned_prices = prices[mask]
-            aligned_dates = price_dates[mask]
-            
-            # HISTORICAL VOLATILITY (Realized)
-            log_ret = np.log(data['Close'] / data['Close'].shift(1))
-            hist_vol = log_ret.rolling(window=30).std() * np.sqrt(252)
-            hist_vol = self.to_scalar_array(hist_vol.fillna(0))
-            aligned_hist_vol = hist_vol[mask]
-            
-            return f, spec_dates, Sxx, aligned_dates, aligned_prices, aligned_hist_vol
-            
-        except Exception as e:
-            print(f"Spectrogram Error: {e}")
-            return None, None, None, None, None, None
-
-    # --- MODULE 4: OPTIONS (RAW / ILLIQUID MODE) ---
-    def get_options_analytics(self, ticker):
-        try:
-            clean_ticker = ticker.split(" ")[0].upper()
-            tk = yf.Ticker(clean_ticker)
-            
-            # 1. Dates Check
-            try: dates = tk.options
-            except: dates = None
-            if not dates: return {"Error": "No Options Chain Found (Ticker might not have options)"}
-            
-            # 2. Raw Chain Fetch (No Filtering)
-            chain = tk.option_chain(dates[0])
-            calls = chain.calls
-            puts = chain.puts
-            
-            # 3. Handle Empty Dataframes (Ghost Chains)
-            if calls.empty and puts.empty:
-                return {"Error": "Options exist but data is empty right now."}
-
-            # 4. Illiquid Pricing Logic (Use Bid/Ask Midpoint if LastPrice is stale)
-            # We treat 0 volume as VALID data now.
-            
-            # Calc Put/Call Ratio (Volume based)
-            call_vol = calls['volume'].sum()
-            put_vol = puts['volume'].sum()
-            pcr = put_vol / call_vol if call_vol > 0 else 0.0
-            
-            # 5. Implied Volatility (The "Fear" Metric)
-            # We average the IV of options Near-The-Money (NTM)
-            curr = self.to_scalar(tk.fast_info['lastPrice'])
-            if curr == 0: 
-                hist = tk.history(period="1d")
-                if not hist.empty: curr = self.to_scalar(hist['Close'].iloc[-1])
-            
-            # Wide filter for illiquid stocks (Strike +/- 20%)
-            atm_calls = calls[(calls['strike'] > curr*0.80) & (calls['strike'] < curr*1.20)]
-            
-            # If ATM calls have 0 IV (common in bad data), try Puts
-            if not atm_calls.empty and atm_calls['impliedVolatility'].mean() > 0.01:
-                iv = atm_calls['impliedVolatility'].mean()
+                # Row 4: RSI
+                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['RSI'], line=dict(color='#9467bd', width=2), name='RSI'), row=4, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
+                
+                # Formatting and Layout Update
+                fig.update_layout(
+                    height=1000, 
+                    showlegend=False, 
+                    template="plotly_dark", 
+                    margin=dict(l=40, r=40, t=40, b=40)
+                )
+                
+                # Lock Axis Titles and Limits
+                fig.update_yaxes(title_text="Frequency", row=1, col=1, secondary_y=False)
+                fig.update_yaxes(title_text="Price ($)", row=1, col=1, secondary_y=True)
+                fig.update_yaxes(title_text="Vol (%)", row=2, col=1)
+                fig.update_yaxes(title_text="MACD", row=3, col=1)
+                fig.update_yaxes(title_text="RSI", range=[0, 100], row=4, col=1) # Locks RSI cleanly between 0-100
+                
+                st.plotly_chart(fig, use_container_width=True)
             else:
-                # Fallback to Puts
-                atm_puts = puts[(puts['strike'] > curr*0.80) & (puts['strike'] < curr*1.20)]
-                iv = atm_puts['impliedVolatility'].mean() if not atm_puts.empty else 0
-            
-            # 6. Historical Volatility (The "Reality" Metric)
-            hist_df = tk.history(period="3mo")
-            hv = 0
-            if not hist_df.empty:
-                # 30-Day Realized Vol
-                log_ret = np.log(hist_df['Close']/hist_df['Close'].shift(1))
-                hv = log_ret.rolling(window=30).std().iloc[-1] * np.sqrt(252)
+                st.error(f"Could not generate data for {spec_ticker}. History too short or data error.")
 
-            return {
-                "PCR": pcr, 
-                "IV": iv, 
-                "HV": hv, 
-                "Vol_Premium": iv - hv, 
-                "Nearest_Exp": dates[0],
-                "Current_Price": curr
-            }
-        except Exception as e:
-             return {"Error": str(e)}
+# --- TAB 4: OPTIONS (ILLIQUID FOCUS) ---
+with tab4:
+    st.header("Illiquid Options Analyzer")
+    st.markdown("This tool compares **Implied Volatility (IV)** vs. **Realized Volatility (HV)** to find expensive premiums.")
+    
+    opt_ticker = st.text_input("Options Ticker", value="IREN")
+    
+    if st.button("Analyze Chain"):
+        with st.spinner("Fetching Raw Chain..."):
+            data = engine.get_options_analytics(opt_ticker)
+            
+            if data and "Error" not in data:
+                # 1. The "Writer's Spread"
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Implied Vol (The Price)", f"{data['IV']:.1%}", help="What the market is charging for options right now.")
+                c2.metric("Realized Vol (The Reality)", f"{data['HV']:.1%}", help="How much the stock actually moves.")
+                
+                premium = data['Vol_Premium']
+                delta_color = "normal" if premium > 0 else "inverse"
+                c3.metric("Writer's Edge (IV - HV)", f"{premium:.1%}", delta="Expensive" if premium > 0.1 else "Cheap", delta_color=delta_color)
+                
+                st.divider()
+                
+                # 2. Visualizing the Spread
+                # Simple Bar Chart comparing IV vs HV
+                fig_vol = go.Figure()
+                fig_vol.add_trace(go.Bar(name='Implied Vol (Fear)', x=['Volatility'], y=[data['IV']], marker_color='#ff5e5e')) # Red
+                fig_vol.add_trace(go.Bar(name='Realized Vol (Reality)', x=['Volatility'], y=[data['HV']], marker_color='cyan')) # Cyan
+                fig_vol.update_layout(barmode='group', title="Fear vs. Reality: Are Options Overpriced?", height=400)
+                st.plotly_chart(fig_vol, use_container_width=True)
+                
+                if premium > 0.20:
+                    st.success(f"🔥 **SUPER PREMIUM:** Options are trading 20%+ higher than actual volatility. This is a classic 'Illiquid Writer' setup.")
+                elif premium > 0.10:
+                    st.info(f"✅ **EXPENSIVE:** Good conditions for writing calls/puts.")
+                else:
+                    st.warning("⚠️ **CHEAP/FAIR:** Premiums are low. Writing here is risky.")
+                    
+            elif data and "Error" in data:
+                st.error(f"Analysis Failed: {data['Error']}")
+                st.caption("Note: For micro-caps, if no one has traded an option in days, Yahoo Finance may return an empty chain.")
