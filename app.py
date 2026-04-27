@@ -226,37 +226,21 @@ with tab4:
             elif data and "Error" in data:
                 st.error(f"Analysis Failed: {data['Error']}")
 
-# --- MODULE 5: WAVELET REGIME ---
-    def generate_wavelet_energy(self, ticker):
-        try:
-            clean_ticker = ticker.split(" ")[0].upper()
-            
-            # UPGRADE: Shifted from fragile 5m data to highly stable 1h data over 1 year.
-            # This perfectly captures institutional TWAP execution without hitting API walls.
-            data = yf.download(clean_ticker, period="1y", interval="1h", progress=False)
-            
-            if data.empty: return None, None, None
-            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-
-            prices = data['Close'].to_numpy()
-            
-            # Perform Discrete Wavelet Transform
-            coeffs = pywt.wavedec(prices, 'db4', level=4)
-            
-            # Extract Low Frequency (Institutional Trend) and High Frequency (Retail/HFT Noise)
-            cA4 = coeffs[0] 
-            cD1 = coeffs[-1]
-            
-            # Calculate rolling energy (expanded window for hourly data)
-            energy_low = np.convolve(cA4**2, np.ones(20)/20, mode='same')
-            energy_high = np.convolve(cD1**2, np.ones(20)/20, mode='same')
-            
-            energy_high[energy_high == 0] = 1e-10
-            ratio = energy_low[:len(prices)] / energy_high[:len(prices)] 
-            
-            target_len = min(len(prices), len(ratio))
-            
-            return data.index[-target_len:], prices[-target_len:], ratio[-target_len:]
-        except Exception as e:
-            print(f"Wavelet Error: {e}")
-            return None, None, None
+# --- TAB 5: WAVELET REGIME ---
+with tab5:
+    st.header("Wavelet-Based Regime Detection")
+    st.markdown("Separates low-frequency institutional accumulation from high-frequency retail noise using DWT Energy Ratios.")
+    wav_ticker = st.text_input("Asset Ticker", value="BTC-USD")
+    
+    if st.button("Calculate DWT Energy"):
+        with st.spinner("Processing 1-hour intervals..."):
+            dates, prices, energy_ratio = engine.generate_wavelet_energy(wav_ticker)
+            if dates is not None:
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.5, 0.5], vertical_spacing=0.05)
+                fig.add_trace(go.Scatter(x=dates, y=prices, name='Price', line=dict(color='cyan')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=dates, y=energy_ratio, name='Low/High Energy Ratio', line=dict(color='orange')), row=2, col=1)
+                
+                fig.update_layout(height=600, template="plotly_dark", title="Institutional Signal (Low-Freq Energy Ratio)")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.error("Failed to retrieve intraday data. Ticker may be invalid or data unavailable.")
