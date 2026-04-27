@@ -106,4 +106,165 @@ class StrategyEngine:
             returns_dates = price_dates[1:] 
             
             n_per_seg = 60 if len(returns) > 100 else 10
-            f, t, Sxx = signal.spectrogram(returns, fs=1.0, window='hann', nperseg=n_per_seg, noverlap=int(n
+            f, t, Sxx = signal.spectrogram(returns, fs=1.0, window='hann', nperseg=n_per_seg, noverlap=int(n_per_seg/2))
+            
+            t_indices = np.floor(t).astype(int)
+            t_indices = np.clip(t_indices, 0, len(returns_dates) - 1)
+            spec_dates = returns_dates[t_indices]
+            
+            start_date = spec_dates[0]
+            mask = price_dates >= start_date
+            aligned_prices = prices[mask]
+            aligned_dates = price_dates[mask]
+            
+            log_ret = np.log(data['Close'] / data['Close'].shift(1))
+            hist_vol = log_ret.rolling(window=30).std() * np.sqrt(252)
+            hist_vol = self.to_scalar_array(hist_vol.fillna(0))
+            aligned_hist_vol = hist_vol[mask]
+            
+            return f, spec_dates, Sxx, aligned_dates, aligned_prices, aligned_hist_vol
+            
+        except Exception as e:
+            print(f"Spectrogram Error: {e}")
+            return None, None, None, None, None, None
+
+    # --- MODULE 4: OPTIONS & BETA ---
+    def _fetch_macro_vix(self):
+        try:
+            vix_1d = self.to_scalar(yf.Ticker("^VIX1D").history(period="1d")['Close'].iloc[-1]) / 100.0
+            vix_30d = self.to_scalar(yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]) / 100.0
+            return vix_1d, vix_30d
+        except:
+            return 0.0, 0.0
+
+    def _calculate_beta(self, ticker, period="1y"):
+        try:
+            stock = yf.Ticker(ticker).history(period=period)['Close'].pct_change().dropna()
+            spy = yf.Ticker("SPY").history(period=period)['Close'].pct_change().dropna()
+            data = pd.concat([stock, spy], axis=1).dropna()
+            data.columns = ['Stock', 'SPY']
+            cov = np.cov(data['Stock'], data['SPY'])[0][1]
+            var = np.var(data['SPY'])
+            return cov / var if var > 0 else 1.0
+        except:
+            return 1.0
+
+    def _process_chain_window(self, tk, exp_date, curr_price, macro_vix, beta):
+        try:
+            chain = tk.option_chain(exp_date)
+            calls, puts = chain.calls, chain.puts
+            
+            if calls.empty and puts.empty: return None
+
+            call_vol = calls['volume'].sum()
+            put_vol = puts['volume'].sum()
+            total_vol = call_vol + put_vol
+            
+            call_oi = calls['openInterest'].sum()
+            put_oi = puts['openInterest'].sum()
+            total_oi = call_oi + put_oi
+            
+            pcr = put_vol / call_vol if call_vol > 0 else 0.0
+
+            atm_calls = calls[(calls['strike'] > curr_price * 0.85) & (calls['strike'] < curr_price * 1.15)]
+            atm_puts = puts[(puts['strike'] > curr_price * 0.85) & (puts['strike'] < curr_price * 1.15)]
+            
+            iv_calls = atm_calls['impliedVolatility'].mean() if not atm_calls.empty else 0.0
+            iv_puts = atm_puts['impliedVolatility'].mean() if not atm_puts.empty else 0.0
+            iv = (iv_calls + iv_puts) / 2 if (iv_calls > 0.01 and iv_puts > 0.01) else max(iv_calls, iv_puts)
+
+            beta_adj_vix = macro_vix * beta
+
+            return {
+                "Date": exp_date,
+                "IV": iv,
+                "Macro_VIX": macro_vix,
+                "Beta_Adj_VIX": beta_adj_vix,
+                "Vol_Premium": iv - beta_adj_vix,
+                "PCR": pcr,
+                "Total_Volume": total_vol,
+                "Call_Vol": call_vol,
+                "Put_Vol": put_vol,
+                "Total_OI": total_oi,
+                "Calls_DF": calls,
+                "Puts_DF": puts
+            }
+        except:
+            return None
+
+    def get_options_analytics(self, ticker):
+        try:
+            clean_ticker = ticker.split(" ")[0].upper()
+            tk = yf.Ticker(clean_ticker)
+            
+            try: dates = tk.options
+            except: dates = None
+            if not dates: return {"Error": "No Options Chain Found."}
+
+            curr_price = self.to_scalar(tk.fast_info['lastPrice'])
+            if curr_price == 0: 
+                hist = tk.history(period="1d")
+                if not hist.empty: curr_price = self.to_scalar(hist['Close'].iloc[-1])
+
+            hist_df = tk.history(period="3mo")
+            hv = 0
+            if not hist_df.empty:
+                log_ret = np.log(hist_df['Close']/hist_df['Close'].shift(1))
+                hv = log_ret.rolling(window=30).std().iloc[-1] * np.sqrt(252)
+
+            vix_1d, vix_30d = self._fetch_macro_vix()
+            beta = self._calculate_beta(clean_ticker)
+
+            today = datetime.today()
+            date_objs = [(d, (datetime.strptime(d, '%Y-%m-%d') - today).days) for d in dates]
+            
+            dte_0_matches = [d for d, days in date_objs if 0 <= days <= 1]
+            dte_0_date = dte_0_matches[0] if dte_0_matches else None
+            
+            dte_30_matches = [d for d, days in date_objs if 27 <= days <= 37]
+            
+            if dte_30_matches:
+                dte_30_date = min(dte_30_matches, key=lambda d: abs((datetime.strptime(d, '%Y-%m-%d') - today).days - 30))
+            else:
+                dte_30_date = min(dates, key=lambda d: abs((datetime.strptime(d, '%Y-%m-%d') - today).days - 30))
+
+            data_0dte = self._process_chain_window(tk, dte_0_date, curr_price, vix_1d, beta) if dte_0_date else None
+            data_30dte = self._process_chain_window(tk, dte_30_date, curr_price, vix_30d, beta) if dte_30_date else None
+
+            return {
+                "Current_Price": curr_price,
+                "HV_30D": hv,
+                "Beta": beta,
+                "0DTE": data_0dte,
+                "30DTE": data_30dte
+            }
+        except Exception as e:
+             return {"Error": str(e)}
+
+    # --- MODULE 5: WAVELET REGIME ---
+    def generate_wavelet_energy(self, ticker):
+        try:
+            clean_ticker = ticker.split(" ")[0].upper()
+            data = yf.download(clean_ticker, period="60d", interval="5m", progress=False)
+            if data.empty: return None, None, None
+            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+
+            prices = data['Close'].to_numpy()
+            
+            coeffs = pywt.wavedec(prices, 'db4', level=4)
+            cA4 = coeffs[0] 
+            cD1 = coeffs[-1]
+            
+            energy_low = np.convolve(cA4**2, np.ones(10)/10, mode='same')
+            energy_high = np.convolve(cD1**2, np.ones(10)/10, mode='same')
+            
+            energy_high[energy_high == 0] = 1e-10
+            ratio = energy_low[:len(prices)] / energy_high[:len(prices)] 
+            
+            target_len = min(len(prices), len(ratio))
+            
+            return data.index[-target_len:], prices[-target_len:], ratio[-target_len:]
+        except Exception as e:
+            print(e)
+            return None, None, None
+            
