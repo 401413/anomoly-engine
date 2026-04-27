@@ -131,8 +131,8 @@ class StrategyEngine:
     # --- MODULE 4: OPTIONS & BETA ---
     def _fetch_macro_vix(self):
         try:
-            vix_1d = self.to_scalar(yf.Ticker("^VIX1D").history(period="1d")['Close'].iloc[-1]) / 100.0
-            vix_30d = self.to_scalar(yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]) / 100.0
+            vix_1d = self.to_scalar(yf.Ticker("^VIX1D").history(period="5d")['Close'].iloc[-1]) / 100.0
+            vix_30d = self.to_scalar(yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]) / 100.0
             return vix_1d, vix_30d
         except:
             return 0.0, 0.0
@@ -201,10 +201,10 @@ class StrategyEngine:
             except: dates = None
             if not dates: return {"Error": "No Options Chain Found."}
 
-            curr_price = self.to_scalar(tk.fast_info['lastPrice'])
-            if curr_price == 0: 
-                hist = tk.history(period="1d")
-                if not hist.empty: curr_price = self.to_scalar(hist['Close'].iloc[-1])
+            # Bulletproof Price Fetching
+            hist_5d = tk.history(period="5d")
+            curr_price = self.to_scalar(hist_5d['Close'].iloc[-1]) if not hist_5d.empty else 0.0
+            if curr_price == 0.0: return {"Error": "Failed to fetch current spot price."}
 
             hist_df = tk.history(period="3mo")
             hv = 0
@@ -222,7 +222,6 @@ class StrategyEngine:
             dte_0_date = dte_0_matches[0] if dte_0_matches else None
             
             dte_30_matches = [d for d, days in date_objs if 27 <= days <= 37]
-            
             if dte_30_matches:
                 dte_30_date = min(dte_30_matches, key=lambda d: abs((datetime.strptime(d, '%Y-%m-%d') - today).days - 30))
             else:
@@ -245,7 +244,8 @@ class StrategyEngine:
     def generate_wavelet_energy(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
-            data = yf.download(clean_ticker, period="60d", interval="5m", progress=False)
+            # Hardcoded to 59d to prevent Yahoo Finance silent failures
+            data = yf.download(clean_ticker, period="59d", interval="5m", progress=False)
             if data.empty: return None, None, None
             if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
 
@@ -267,4 +267,3 @@ class StrategyEngine:
         except Exception as e:
             print(e)
             return None, None, None
-            
