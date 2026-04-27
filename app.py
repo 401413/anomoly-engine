@@ -109,10 +109,19 @@ with tab3:
 
 # --- TAB 4: OPTIONS (DURATION & GEX FOCUS) ---
 with tab4:
-    st.header("Duration & Gamma Arbitrage")
+    st.header("Duration, Skew & Gamma Arbitrage")
     st.markdown("Isolates Implied Volatility (IV) and exposes Dealer Gamma (GEX) walls to identify 'Pinning' targets.")
     
-    opt_ticker = st.text_input("Options Ticker", value="SPY")
+    col_t1, col_t2 = st.columns([1, 2])
+    opt_ticker = col_t1.text_input("Options Ticker", value="SPY")
+    
+    # The Institutional Dealer Assumption Toggle
+    dealer_mode = col_t2.radio(
+        "Dealer Positioning Assumption", 
+        ["Standard (Dealers Short Calls / Short Puts)", "Covered Call Heavy (Dealers Long Calls / Short Puts)", "Inverted (Dealers Long Gamma)"],
+        horizontal=True
+    )
+    st.caption("*Note: Institutional market structure varies. Consider Convertible Bond arbitrageurs, structured product issuance, and systemic covered-call overwriting which can heavily invert traditional dealer assumptions.*")
     
     if st.button("Analyze Options Structure"):
         with st.spinner("Fetching Term Structure & Calculating GEX..."):
@@ -147,24 +156,48 @@ with tab4:
                     
                     c5.metric("Total Volume", f"{window_data['Total_Volume']:,.0f}", f"OI: {window_data['Total_OI']:,.0f}")
 
+                    # Safely retrieve dataframes
+                    calls = window_data.get('Calls_DF', pd.DataFrame())
+                    puts = window_data.get('Puts_DF', pd.DataFrame())
+                    
+                    if calls.empty or puts.empty:
+                        st.warning("Incomplete chain data retrieved from API.")
+                        return
+
                     # Filter for Strike Range (+/- 15%)
-                    calls, puts = window_data['Calls_DF'], window_data['Puts_DF']
                     calls = calls[(calls['strike'] >= curr_price * 0.85) & (calls['strike'] <= curr_price * 1.15)]
                     puts = puts[(puts['strike'] >= curr_price * 0.85) & (puts['strike'] <= curr_price * 1.15)]
 
-                    # GEX Visualization
-                    st.markdown("#### Net Dealer Gamma Exposure (GEX)")
-                    fig_gex = go.Figure()
-                    fig_gex.add_trace(go.Bar(name='Call GEX (Positive Gamma)', x=calls['strike'], y=calls['GEX'], marker_color='rgba(0, 255, 0, 0.7)'))
-                    fig_gex.add_trace(go.Bar(name='Put GEX (Negative Gamma)', x=puts['strike'], y=puts['GEX'], marker_color='rgba(255, 0, 0, 0.7)'))
+                    # Apply Dealer Assumption Logic
+                    if "Standard" in dealer_mode:
+                        c_mult, p_mult = 1.0, -1.0
+                    elif "Covered Call" in dealer_mode:
+                        c_mult, p_mult = -1.0, -1.0
+                    else:
+                        c_mult, p_mult = -1.0, 1.0
+
+                    calls['Adj_GEX'] = calls.get('GEX', 0.0) * c_mult
+                    puts['Adj_GEX'] = puts.get('GEX', 0.0) * p_mult
+
+                    # GEX Visualization & Convexity Skew
+                    st.markdown("#### Net Dealer Gamma Exposure (GEX) & Volatility Skew")
+                    st.caption("Bar chart displays Gamma pinning zones. The yellow line displays the Volatility Skew, empirically demonstrating the market's pricing of tail convexity against log-normal assumptions.")
+                    
+                    fig_gex = make_subplots(specs=[[{"secondary_y": True}]])
+                    
+                    # GEX Bars
+                    fig_gex.add_trace(go.Bar(name='Call GEX', x=calls['strike'], y=calls['Adj_GEX'], marker_color='rgba(0, 255, 0, 0.7)'), secondary_y=False)
+                    fig_gex.add_trace(go.Bar(name='Put GEX', x=puts['strike'], y=puts['Adj_GEX'], marker_color='rgba(255, 0, 0, 0.7)'), secondary_y=False)
+                    
+                    # Convexity / Volatility Skew Overlay
+                    fig_gex.add_trace(go.Scatter(name='Put IV (Convexity Skew)', x=puts['strike'], y=puts['impliedVolatility'], mode='lines', line=dict(color='#ffaa00', width=2)), secondary_y=True)
+
                     fig_gex.add_vline(x=curr_price, line_dash="dash", line_color="white", annotation_text="Spot")
-                    fig_gex.update_layout(barmode='relative', height=350, template="plotly_dark", xaxis_title="Strike", yaxis_title="Net GEX (Shares)")
+                    fig_gex.update_layout(barmode='relative', height=400, template="plotly_dark", xaxis_title="Strike", yaxis_title="Net GEX (Shares)")
+                    fig_gex.update_yaxes(title_text="Implied Volatility", secondary_y=True)
                     st.plotly_chart(fig_gex, use_container_width=True)
 
                     # Pricing and Slippage Analysis
-                    st.markdown("#### Execution Feasibility (Bid/Ask Spread Trap)")
-                    st.caption("Average slippage metrics for Near-The-Money (NTM) strikes. Wide spreads destroy vertical spread mechanics.")
-                    
                     ntm_calls = calls[(calls['strike'] >= curr_price * 0.95) & (calls['strike'] <= curr_price * 1.05)]
                     if not ntm_calls.empty:
                         avg_call_spread = ntm_calls['Spread_%'].mean()
