@@ -107,15 +107,15 @@ with tab3:
             else:
                 st.error(f"Could not generate data for {spec_ticker}. History too short or data error.")
 
-# --- TAB 4: OPTIONS (DURATION FOCUS) ---
+# --- TAB 4: OPTIONS (DURATION & GEX FOCUS) ---
 with tab4:
-    st.header("Duration & Variance Arbitrage")
-    st.markdown("Isolates Implied Volatility (IV) against Beta-Adjusted macro benchmarks.")
+    st.header("Duration & Gamma Arbitrage")
+    st.markdown("Isolates Implied Volatility (IV) and exposes Dealer Gamma (GEX) walls to identify 'Pinning' targets.")
     
     opt_ticker = st.text_input("Options Ticker", value="SPY")
     
     if st.button("Analyze Options Structure"):
-        with st.spinner("Fetching Term Structure & Liquidity..."):
+        with st.spinner("Fetching Term Structure & Calculating GEX..."):
             data = engine.get_options_analytics(opt_ticker)
             
             if data and "Error" not in data:
@@ -146,21 +146,33 @@ with tab4:
                     c4.metric("Variance Spread", f"{premium:.1%}", delta="Expensive" if premium > 0.05 else "Discounted", delta_color=delta_color)
                     
                     c5.metric("Total Volume", f"{window_data['Total_Volume']:,.0f}", f"OI: {window_data['Total_OI']:,.0f}")
-                    st.caption(f"Volume Breakdown - Calls: {window_data['Call_Vol']:,.0f} | Puts: {window_data['Put_Vol']:,.0f}")
 
+                    # Filter for Strike Range (+/- 15%)
                     calls, puts = window_data['Calls_DF'], window_data['Puts_DF']
-                    calls = calls[(calls['strike'] >= curr_price * 0.9) & (calls['strike'] <= curr_price * 1.1)]
-                    puts = puts[(puts['strike'] >= curr_price * 0.9) & (puts['strike'] <= curr_price * 1.1)]
+                    calls = calls[(calls['strike'] >= curr_price * 0.85) & (calls['strike'] <= curr_price * 1.15)]
+                    puts = puts[(puts['strike'] >= curr_price * 0.85) & (puts['strike'] <= curr_price * 1.15)]
 
-                    fig = make_subplots(specs=[[{"secondary_y": True}]])
-                    fig.add_trace(go.Bar(name='Call Volume', x=calls['strike'], y=calls['volume'], marker_color='rgba(0, 255, 0, 0.6)'), secondary_y=False)
-                    fig.add_trace(go.Bar(name='Put Volume', x=puts['strike'], y=puts['volume'], marker_color='rgba(255, 0, 0, 0.6)'), secondary_y=False)
-                    fig.add_trace(go.Scatter(name='Call OI', x=calls['strike'], y=calls['openInterest'], mode='lines+markers', line=dict(color='#00ff00', width=2)), secondary_y=True)
-                    fig.add_trace(go.Scatter(name='Put OI', x=puts['strike'], y=puts['openInterest'], mode='lines+markers', line=dict(color='#ff0000', width=2)), secondary_y=True)
+                    # GEX Visualization
+                    st.markdown("#### Net Dealer Gamma Exposure (GEX)")
+                    fig_gex = go.Figure()
+                    fig_gex.add_trace(go.Bar(name='Call GEX (Positive Gamma)', x=calls['strike'], y=calls['GEX'], marker_color='rgba(0, 255, 0, 0.7)'))
+                    fig_gex.add_trace(go.Bar(name='Put GEX (Negative Gamma)', x=puts['strike'], y=puts['GEX'], marker_color='rgba(255, 0, 0, 0.7)'))
+                    fig_gex.add_vline(x=curr_price, line_dash="dash", line_color="white", annotation_text="Spot")
+                    fig_gex.update_layout(barmode='relative', height=350, template="plotly_dark", xaxis_title="Strike", yaxis_title="Net GEX (Shares)")
+                    st.plotly_chart(fig_gex, use_container_width=True)
 
-                    fig.add_vline(x=curr_price, line_dash="dash", line_color="white", annotation_text="Spot")
-                    fig.update_layout(barmode='group', height=350, template="plotly_dark", xaxis_title="Strike", yaxis_title="Volume")
-                    st.plotly_chart(fig, use_container_width=True)
+                    # Pricing and Slippage Analysis
+                    st.markdown("#### Execution Feasibility (Bid/Ask Spread Trap)")
+                    st.caption("Average slippage metrics for Near-The-Money (NTM) strikes. Wide spreads destroy vertical spread mechanics.")
+                    
+                    ntm_calls = calls[(calls['strike'] >= curr_price * 0.95) & (calls['strike'] <= curr_price * 1.05)]
+                    if not ntm_calls.empty:
+                        avg_call_spread = ntm_calls['Spread_%'].mean()
+                        avg_put_spread = puts[(puts['strike'] >= curr_price * 0.95) & (puts['strike'] <= curr_price * 1.05)]['Spread_%'].mean()
+                        
+                        col_a, col_b = st.columns(2)
+                        col_a.metric("Avg Call Slippage (NTM)", f"{avg_call_spread:.1%}", delta="Illiquid" if avg_call_spread > 0.10 else "Liquid", delta_color="inverse")
+                        col_b.metric("Avg Put Slippage (NTM)", f"{avg_put_spread:.1%}", delta="Illiquid" if avg_put_spread > 0.10 else "Liquid", delta_color="inverse")
 
                 render_duration_block("Structural Window (27-37 DTE)", data.get('30DTE'), is_0dte=False)
                 st.divider()
