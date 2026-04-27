@@ -164,30 +164,37 @@ class StrategyEngine:
     def _process_chain_window(self, tk, exp_date, curr_price, macro_vix, beta):
         try:
             chain = tk.option_chain(exp_date)
-            calls, puts = chain.calls, chain.puts
+            # Use .copy() to prevent Pandas SettingWithCopy errors
+            calls, puts = chain.calls.copy(), chain.puts.copy()
             
             if calls.empty and puts.empty: return None
 
-            # Calculate Days to Expiration (T) for Black-Scholes
+            # Pre-initialize columns to prevent KeyErrors on bad Yahoo data
+            calls['Gamma'] = 0.0
+            calls['GEX'] = 0.0
+            calls['Spread_%'] = 0.0
+            puts['Gamma'] = 0.0
+            puts['GEX'] = 0.0
+            puts['Spread_%'] = 0.0
+
             days_to_exp = max((datetime.strptime(exp_date, '%Y-%m-%d') - datetime.today()).days, 0.5)
             T = days_to_exp / 365.0
 
-            # GEX and Spread Calculation for Calls
-            calls['Gamma'] = calls.apply(lambda row: self._calc_bs_gamma(curr_price, row['strike'], T, row['impliedVolatility']), axis=1)
-            # Call GEX = OI * Gamma * 100 * Spot Price (Market Maker is assumed short)
-            calls['GEX'] = calls['openInterest'] * calls['Gamma'] * 100 * curr_price
-            calls['Spread_%'] = np.where(calls['ask'] > 0, (calls['ask'] - calls['bid']) / calls['ask'], 0)
+            if not calls.empty:
+                calls['Gamma'] = calls.apply(lambda row: self._calc_bs_gamma(curr_price, row['strike'], T, row.get('impliedVolatility', 0.0)), axis=1)
+                # Base GEX logic (Positive values for absolute size, we flip it in the UI)
+                calls['GEX'] = calls['openInterest'] * calls['Gamma'] * 100 * curr_price
+                calls['Spread_%'] = np.where(calls['ask'] > 0, (calls['ask'] - calls['bid']) / calls['ask'], 0)
 
-            # GEX and Spread Calculation for Puts
-            puts['Gamma'] = puts.apply(lambda row: self._calc_bs_gamma(curr_price, row['strike'], T, row['impliedVolatility']), axis=1)
-            # Put GEX = OI * Gamma * 100 * Spot Price * -1 (Market Maker is assumed short, creating negative hedging flow)
-            puts['GEX'] = puts['openInterest'] * puts['Gamma'] * 100 * curr_price * -1
-            puts['Spread_%'] = np.where(puts['ask'] > 0, (puts['ask'] - puts['bid']) / puts['ask'], 0)
+            if not puts.empty:
+                puts['Gamma'] = puts.apply(lambda row: self._calc_bs_gamma(curr_price, row['strike'], T, row.get('impliedVolatility', 0.0)), axis=1)
+                puts['GEX'] = puts['openInterest'] * puts['Gamma'] * 100 * curr_price
+                puts['Spread_%'] = np.where(puts['ask'] > 0, (puts['ask'] - puts['bid']) / puts['ask'], 0)
 
-            call_vol = calls['volume'].sum()
-            put_vol = puts['volume'].sum()
+            call_vol = calls['volume'].sum() if not calls.empty else 0
+            put_vol = puts['volume'].sum() if not puts.empty else 0
             total_vol = call_vol + put_vol
-            total_oi = calls['openInterest'].sum() + puts['openInterest'].sum()
+            total_oi = (calls['openInterest'].sum() if not calls.empty else 0) + (puts['openInterest'].sum() if not puts.empty else 0)
             pcr = put_vol / call_vol if call_vol > 0 else 0.0
 
             atm_calls = calls[(calls['strike'] > curr_price * 0.85) & (calls['strike'] < curr_price * 1.15)]
