@@ -144,17 +144,17 @@ with tab4:
                     st.markdown(f"### {title} (Expiry: {window_data['Date']})")
                     
                     c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("Put/Call Ratio", f"{window_data['PCR']:.2f}")
-                    c2.metric(f"Implied Vol (IV)", f"{window_data['IV']:.1%}")
+                    c1.metric("Put/Call Ratio", f"{window_data.get('PCR', 0):.2f}")
+                    c2.metric(f"Implied Vol (IV)", f"{window_data.get('IV', 0):.1%}")
                     
                     vix_label = "Beta-Adj VIX1D" if is_0dte else "Beta-Adj VIX"
-                    c3.metric(vix_label, f"{window_data['Beta_Adj_VIX']:.1%}")
+                    c3.metric(vix_label, f"{window_data.get('Beta_Adj_VIX', 0):.1%}")
                     
-                    premium = window_data['Vol_Premium']
+                    premium = window_data.get('Vol_Premium', 0)
                     delta_color = "normal" if premium > 0 else "inverse"
                     c4.metric("Variance Spread", f"{premium:.1%}", delta="Expensive" if premium > 0.05 else "Discounted", delta_color=delta_color)
                     
-                    c5.metric("Total Volume", f"{window_data['Total_Volume']:,.0f}", f"OI: {window_data['Total_OI']:,.0f}")
+                    c5.metric("Total Volume", f"{window_data.get('Total_Volume', 0):,.0f}", f"OI: {window_data.get('Total_OI', 0):,.0f}")
 
                     # Safely retrieve dataframes
                     calls = window_data.get('Calls_DF', pd.DataFrame())
@@ -165,8 +165,8 @@ with tab4:
                         return
 
                     # Filter for Strike Range (+/- 15%)
-                    calls = calls[(calls['strike'] >= curr_price * 0.85) & (calls['strike'] <= curr_price * 1.15)]
-                    puts = puts[(puts['strike'] >= curr_price * 0.85) & (puts['strike'] <= curr_price * 1.15)]
+                    calls = calls[(calls['strike'] >= curr_price * 0.85) & (calls['strike'] <= curr_price * 1.15)].copy()
+                    puts = puts[(puts['strike'] >= curr_price * 0.85) & (puts['strike'] <= curr_price * 1.15)].copy()
 
                     # Apply Dealer Assumption Logic
                     if "Standard" in dealer_mode:
@@ -176,8 +176,9 @@ with tab4:
                     else:
                         c_mult, p_mult = -1.0, 1.0
 
-                    calls['Adj_GEX'] = calls.get('GEX', 0.0) * c_mult
-                    puts['Adj_GEX'] = puts.get('GEX', 0.0) * p_mult
+                    # Defensively extract GEX, defaulting to 0 if the backend failed to generate it
+                    calls['Adj_GEX'] = calls.get('GEX', pd.Series(0, index=calls.index)) * c_mult
+                    puts['Adj_GEX'] = puts.get('GEX', pd.Series(0, index=puts.index)) * p_mult
 
                     # GEX Visualization & Convexity Skew
                     st.markdown("#### Net Dealer Gamma Exposure (GEX) & Volatility Skew")
@@ -189,23 +190,34 @@ with tab4:
                     fig_gex.add_trace(go.Bar(name='Call GEX', x=calls['strike'], y=calls['Adj_GEX'], marker_color='rgba(0, 255, 0, 0.7)'), secondary_y=False)
                     fig_gex.add_trace(go.Bar(name='Put GEX', x=puts['strike'], y=puts['Adj_GEX'], marker_color='rgba(255, 0, 0, 0.7)'), secondary_y=False)
                     
-                    # Convexity / Volatility Skew Overlay
-                    fig_gex.add_trace(go.Scatter(name='Put IV (Convexity Skew)', x=puts['strike'], y=puts['impliedVolatility'], mode='lines', line=dict(color='#ffaa00', width=2)), secondary_y=True)
+                    # Convexity / Volatility Skew Overlay (Safely accessing impliedVolatility)
+                    iv_col = 'impliedVolatility' if 'impliedVolatility' in puts.columns else None
+                    if iv_col:
+                        fig_gex.add_trace(go.Scatter(name='Put IV (Convexity Skew)', x=puts['strike'], y=puts[iv_col], mode='lines', line=dict(color='#ffaa00', width=2)), secondary_y=True)
 
                     fig_gex.add_vline(x=curr_price, line_dash="dash", line_color="white", annotation_text="Spot")
                     fig_gex.update_layout(barmode='relative', height=400, template="plotly_dark", xaxis_title="Strike", yaxis_title="Net GEX (Shares)")
                     fig_gex.update_yaxes(title_text="Implied Volatility", secondary_y=True)
                     st.plotly_chart(fig_gex, use_container_width=True)
 
-                    # Pricing and Slippage Analysis
+                    # Pricing and Slippage Analysis (Defensive Check)
+                    st.markdown("#### Execution Feasibility (Bid/Ask Spread Trap)")
+                    st.caption("Average slippage metrics for Near-The-Money (NTM) strikes. Wide spreads destroy vertical spread mechanics.")
+                    
                     ntm_calls = calls[(calls['strike'] >= curr_price * 0.95) & (calls['strike'] <= curr_price * 1.05)]
-                    if not ntm_calls.empty:
-                        avg_call_spread = ntm_calls['Spread_%'].mean()
-                        avg_put_spread = puts[(puts['strike'] >= curr_price * 0.95) & (puts['strike'] <= curr_price * 1.05)]['Spread_%'].mean()
-                        
-                        col_a, col_b = st.columns(2)
-                        col_a.metric("Avg Call Slippage (NTM)", f"{avg_call_spread:.1%}", delta="Illiquid" if avg_call_spread > 0.10 else "Liquid", delta_color="inverse")
-                        col_b.metric("Avg Put Slippage (NTM)", f"{avg_put_spread:.1%}", delta="Illiquid" if avg_put_spread > 0.10 else "Liquid", delta_color="inverse")
+                    ntm_puts = puts[(puts['strike'] >= curr_price * 0.95) & (puts['strike'] <= curr_price * 1.05)]
+                    
+                    # Calculate mean securely, handling missing columns or empty dataframes gracefully
+                    avg_call_spread = ntm_calls['Spread_%'].mean() if 'Spread_%' in ntm_calls.columns and not ntm_calls.empty else 0.0
+                    avg_put_spread = ntm_puts['Spread_%'].mean() if 'Spread_%' in ntm_puts.columns and not ntm_puts.empty else 0.0
+                    
+                    # Filter out NaNs if arithmetic failed
+                    avg_call_spread = 0.0 if pd.isna(avg_call_spread) else avg_call_spread
+                    avg_put_spread = 0.0 if pd.isna(avg_put_spread) else avg_put_spread
+                    
+                    col_a, col_b = st.columns(2)
+                    col_a.metric("Avg Call Slippage (NTM)", f"{avg_call_spread:.1%}", delta="Illiquid" if avg_call_spread > 0.10 else "Liquid", delta_color="inverse")
+                    col_b.metric("Avg Put Slippage (NTM)", f"{avg_put_spread:.1%}", delta="Illiquid" if avg_put_spread > 0.10 else "Liquid", delta_color="inverse")
 
                 render_duration_block("Structural Window (27-37 DTE)", data.get('30DTE'), is_0dte=False)
                 st.divider()
