@@ -271,23 +271,30 @@ class StrategyEngine:
         except Exception as e:
              return {"Error": str(e)}
 
-    # --- MODULE 5: WAVELET REGIME ---
+   # --- MODULE 5: WAVELET REGIME ---
     def generate_wavelet_energy(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
-            # Hardcoded to 59d to prevent Yahoo Finance silent failures
-            data = yf.download(clean_ticker, period="59d", interval="5m", progress=False)
+            
+            # UPGRADE: Shifted from fragile 5m data to highly stable 1h data over 1 year.
+            # This perfectly captures institutional TWAP execution without hitting API walls.
+            data = yf.download(clean_ticker, period="1y", interval="1h", progress=False)
+            
             if data.empty: return None, None, None
             if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
 
             prices = data['Close'].to_numpy()
             
+            # Perform Discrete Wavelet Transform
             coeffs = pywt.wavedec(prices, 'db4', level=4)
+            
+            # Extract Low Frequency (Institutional Trend) and High Frequency (Retail/HFT Noise)
             cA4 = coeffs[0] 
             cD1 = coeffs[-1]
             
-            energy_low = np.convolve(cA4**2, np.ones(10)/10, mode='same')
-            energy_high = np.convolve(cD1**2, np.ones(10)/10, mode='same')
+            # Calculate rolling energy (expanded window for hourly data)
+            energy_low = np.convolve(cA4**2, np.ones(20)/20, mode='same')
+            energy_high = np.convolve(cD1**2, np.ones(20)/20, mode='same')
             
             energy_high[energy_high == 0] = 1e-10
             ratio = energy_low[:len(prices)] / energy_high[:len(prices)] 
@@ -296,5 +303,5 @@ class StrategyEngine:
             
             return data.index[-target_len:], prices[-target_len:], ratio[-target_len:]
         except Exception as e:
-            print(e)
+            print(f"Wavelet Error: {e}")
             return None, None, None
