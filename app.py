@@ -229,7 +229,7 @@ with tab5:
     st.info("**Global Ticker Format:** Append exchange suffixes for international queries (e.g., `LSEG.L`). DWT Energy ratio captures hourly TWAP accumulation patterns regardless of local market timezone.")
     
     st.markdown("Separates low-frequency institutional accumulation from high-frequency retail noise using DWT Energy Ratios.")
-  wav_ticker = st.text_input("Asset Ticker", value="SPY")
+      wav_ticker = st.text_input("Asset Ticker", value="SPY")
     
     if st.button("Calculate DWT Energy"):
         with st.spinner("Processing 1-hour intervals..."):
