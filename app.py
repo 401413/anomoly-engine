@@ -12,8 +12,6 @@ st.markdown("""
 <style>
     .stDataFrame {border: 1px solid #444;}
     .metric-card {background-color: #0E1117; border: 1px solid #303030; padding: 15px;}
-    .info-box {background-color: #1a1c24; border-left: 4px solid #4a90e2; padding: 10px; margin-bottom: 15px;}
-    .warning-box {background-color: #2b1a1a; border-left: 4px solid #e24a4a; padding: 10px; margin-bottom: 15px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -25,11 +23,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Portfolio", "🎙️ Sentiment", "
 # --- TAB 1: PORTFOLIO ---
 with tab1:
     st.header("Reflexivity Filter")
-    st.markdown("""
-    <div class="info-box">
-        <b>Exchange Suffix Guide:</b> US Equities require no suffix (e.g., <code>AAPL</code>). For international markets, append the Yahoo Finance exchange suffix (e.g., London: <code>.L</code>, Xetra: <code>.DE</code>, Hong Kong: <code>.HK</code>).
-    </div>
-    """, unsafe_allow_html=True)
+    st.info("**Exchange Suffix Guide:** US Equities require no suffix (e.g., `AAPL`). For international markets, append the Yahoo Finance exchange suffix (e.g., London: `.L`, Xetra: `.DE`, Hong Kong: `.HK`).")
     
     target_fund = st.text_input("UCITS Ticker", value="ICLN")
     if st.button("Run Scan"):
@@ -50,12 +44,10 @@ with tab2:
 # --- TAB 3: SPECTRAL & HISTORY ---
 with tab3:
     st.header("Spectral Density & Momentum Signals")
-    st.markdown("""
-    <div class="info-box">
-        <b>Global Markets & Execution Reality:</b> Use suffixes for international tickers (e.g., <code>BARC.L</code>).<br>
-        <i>Note: Data retrieved outside active local market hours (US: 09:30-16:00 EST | UK: 08:00-16:30 GMT) reflects stale EOD prints and may exhibit widened Bid/Ask spreads.</i>
-    </div>
-    """, unsafe_allow_html=True)
+    st.info("""
+    **Global Markets & Execution Reality:** Use suffixes for international tickers (e.g., `BARC.L`).  
+    *Note: Data retrieved outside active local market hours reflects stale EOD prints and may exhibit widened Bid/Ask spreads.*
+    """)
     
     spec_ticker = st.text_input("Ticker Symbol", value="NVDA")
     
@@ -93,13 +85,7 @@ with tab3:
                     shared_xaxes=True, 
                     row_heights=[0.35, 0.15, 0.15, 0.15, 0.20], 
                     vertical_spacing=0.04,
-                    specs=[
-                        [{"secondary_y": True}],
-                        [{"secondary_y": False}],
-                        [{"secondary_y": False}],
-                        [{"secondary_y": False}],
-                        [{"secondary_y": False}]
-                    ],
+                    specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}]],
                     subplot_titles=("Spectral Density & Price", "30-Day Realized Volatility (%)", "Daily Trading Volume (Shares)", "MACD (12, 26, 9)", "RSI (14)")
                 )
                 
@@ -127,12 +113,10 @@ with tab4:
     st.header("Duration, Skew & Gamma Arbitrage")
     st.markdown("Isolates Implied Volatility (IV) and exposes Dealer Gamma (GEX) walls to identify 'Pinning' targets.")
     
-    st.markdown("""
-    <div class="warning-box">
-        ⚠️ <b>Data Integrity Warning:</b> Standardized options data is structurally reliable <b>only for US-listed equities</b> (no suffixes) during active market hours (09:30 - 16:00 EST).<br><br>
-        <i>Queries executed outside these hours reflect the overnight cleared book. Market makers pull liquidity at the bell, resulting in artificially wide (or zeroed) Bid/Ask spreads. This will mathematically distort Implied Volatility, Slippage, and Variance Spread calculations. Execute logic with caution.</i>
-    </div>
-    """, unsafe_allow_html=True)
+    st.warning("""
+    ⚠️ **Data Integrity Warning:** Standardized options data is structurally reliable **only for US-listed equities** (no suffixes) during active market hours (09:30 - 16:00 EST).  
+    *Queries executed outside these hours reflect the overnight cleared book. Market makers pull liquidity at the bell, resulting in artificially wide (or zeroed) Bid/Ask spreads. This will mathematically distort Implied Volatility and Variance Spread calculations.*
+    """)
         
     col_t1, col_t2 = st.columns([1, 2])
     opt_ticker = col_t1.text_input("US Options Ticker", value="SPY")
@@ -203,10 +187,8 @@ with tab4:
                     puts['Adj_GEX'] = puts.get('GEX', pd.Series(0, index=puts.index)) * p_mult
 
                     st.markdown("#### Net Dealer Gamma Exposure (GEX) & Volatility Skew")
-                    st.caption("Bar chart displays Gamma pinning zones. The yellow line displays the Volatility Skew, empirically demonstrating the market's pricing of tail convexity against log-normal assumptions.")
                     
                     fig_gex = make_subplots(specs=[[{"secondary_y": True}]])
-                    
                     fig_gex.add_trace(go.Bar(name='Call GEX', x=calls['strike'], y=calls['Adj_GEX'], marker_color='rgba(0, 255, 0, 0.7)'), secondary_y=False)
                     fig_gex.add_trace(go.Bar(name='Put GEX', x=puts['strike'], y=puts['Adj_GEX'], marker_color='rgba(255, 0, 0, 0.7)'), secondary_y=False)
                     
@@ -220,7 +202,6 @@ with tab4:
                     st.plotly_chart(fig_gex, use_container_width=True)
 
                     st.markdown("#### Execution Feasibility (Bid/Ask Spread Trap)")
-                    st.caption("Average slippage metrics for Near-The-Money (NTM) strikes. Wide spreads destroy vertical spread mechanics.")
                     
                     ntm_calls = calls[(calls['strike'] >= curr_price * 0.95) & (calls['strike'] <= curr_price * 1.05)]
                     ntm_puts = puts[(puts['strike'] >= curr_price * 0.95) & (puts['strike'] <= curr_price * 1.05)]
@@ -245,11 +226,7 @@ with tab4:
 # --- TAB 5: WAVELET REGIME ---
 with tab5:
     st.header("Wavelet-Based Regime Detection")
-    st.markdown("""
-    <div class="info-box">
-        <b>Global Ticker Format:</b> Append exchange suffixes for international queries (e.g., <code>LSEG.L</code>). DWT Energy ratio captures hourly TWAP accumulation patterns regardless of local market timezone.
-    </div>
-    """, unsafe_allow_html=True)
+    st.info("**Global Ticker Format:** Append exchange suffixes for international queries (e.g., `LSEG.L`). DWT Energy ratio captures hourly TWAP accumulation patterns regardless of local market timezone.")
     
     st.markdown("Separates low-frequency institutional accumulation from high-frequency retail noise using DWT Energy Ratios.")
     wav_ticker = st.text_input("Asset Ticker", value="BTC-USD")
