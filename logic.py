@@ -275,21 +275,35 @@ class StrategyEngine:
         try:
             clean_ticker = ticker.split(" ")[0].upper()
             
-            # Cascading Fallback: Bypasses YF limits by dropping from 730d(1h) -> 6mo(1h) -> 1y(1d)
+            # Cascading Fallback: 729d safely bypasses the strict YF 730d cutoff bug for 1h data
             data = pd.DataFrame()
-            fetch_configs = [("730d", "1h"), ("6mo", "1h"), ("1y", "1d")]
+            fetch_configs = [("729d", "1h"), ("6mo", "1h"), ("1y", "1d")]
             
             for period, interval in fetch_configs:
                 for attempt in range(2):
                     data = yf.download(clean_ticker, period=period, interval=interval, progress=False)
                     if not data.empty: break
-                    time.sleep(1.5)
+                    time.sleep(1.0)
                 if not data.empty: break
             
             if data.empty: return None, None, None
-            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
 
-            prices = data['Close'].to_numpy()
+            # Defensively extract the 'Close' series regardless of YF MultiIndex scrambling
+            if isinstance(data.columns, pd.MultiIndex): 
+                if 'Close' in data.columns.get_level_values(0):
+                    close_col = data['Close']
+                elif 'Close' in data.columns.get_level_values(1):
+                    close_col = data.xs('Close', level=1, axis=1)
+                else:
+                    close_col = data.iloc[:, 0] # Ultimate fallback
+                
+                prices = close_col.iloc[:, 0].to_numpy() if isinstance(close_col, pd.DataFrame) else close_col.to_numpy()
+            else:
+                prices = data['Close'].to_numpy()
+
+            # The Wavelet transform requires a minimum array length to operate (level 4 requires >= 16 points)
+            if len(prices) < 20:
+                return None, None, None
             
             coeffs = pywt.wavedec(prices, 'db4', level=4)
             
@@ -305,6 +319,7 @@ class StrategyEngine:
             target_len = min(len(prices), len(ratio))
             
             return data.index[-target_len:], prices[-target_len:], ratio[-target_len:]
+            
         except Exception as e:
             print(f"Wavelet Error: {e}")
             return None, None, None
