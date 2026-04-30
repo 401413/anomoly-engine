@@ -12,20 +12,12 @@ st.markdown("""
 <style>
     .stDataFrame {border: 1px solid #444;}
     .metric-card {background-color: #0E1117; border: 1px solid #303030; padding: 15px;}
+    .info-box {background-color: #1a1c24; border-left: 4px solid #4a90e2; padding: 10px; margin-bottom: 15px;}
+    .warning-box {background-color: #2b1a1a; border-left: 4px solid #e24a4a; padding: 10px; margin-bottom: 15px;}
 </style>
 """, unsafe_allow_html=True)
 
 engine = StrategyEngine()
-
-# --- INSTITUTIONAL MARKET HOURS GATE ---
-def is_us_market_open():
-    """Defensive check to ensure options pricing is actively clearing."""
-    now = pd.Timestamp.now(tz='US/Eastern')
-    if now.weekday() > 4: # Weekend
-        return False
-    market_start = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_end = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return market_start <= now <= market_end
 
 st.title("⚡ Systematic Alpha Engine")
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Portfolio", "🎙️ Sentiment", "🌊 Spectral & Momentum", "📉 Options", "📐 Wavelet Regime"])
@@ -33,6 +25,12 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Portfolio", "🎙️ Sentiment", "
 # --- TAB 1: PORTFOLIO ---
 with tab1:
     st.header("Reflexivity Filter")
+    st.markdown("""
+    <div class="info-box">
+        <b>Exchange Suffix Guide:</b> US Equities require no suffix (e.g., <code>AAPL</code>). For international markets, append the Yahoo Finance exchange suffix (e.g., London: <code>.L</code>, Xetra: <code>.DE</code>, Hong Kong: <code>.HK</code>).
+    </div>
+    """, unsafe_allow_html=True)
+    
     target_fund = st.text_input("UCITS Ticker", value="ICLN")
     if st.button("Run Scan"):
         with st.spinner("Scanning..."):
@@ -52,6 +50,13 @@ with tab2:
 # --- TAB 3: SPECTRAL & HISTORY ---
 with tab3:
     st.header("Spectral Density & Momentum Signals")
+    st.markdown("""
+    <div class="info-box">
+        <b>Global Markets & Execution Reality:</b> Use suffixes for international tickers (e.g., <code>BARC.L</code>).<br>
+        <i>Note: Data retrieved outside active local market hours (US: 09:30-16:00 EST | UK: 08:00-16:30 GMT) reflects stale EOD prints and may exhibit widened Bid/Ask spreads.</i>
+    </div>
+    """, unsafe_allow_html=True)
+    
     spec_ticker = st.text_input("Ticker Symbol", value="NVDA")
     
     if st.button("Generate Wave"):
@@ -122,14 +127,15 @@ with tab4:
     st.header("Duration, Skew & Gamma Arbitrage")
     st.markdown("Isolates Implied Volatility (IV) and exposes Dealer Gamma (GEX) walls to identify 'Pinning' targets.")
     
-    # Render Market State Warning
-    if not is_us_market_open():
-        st.warning("⚠️ **US Equities Market is Currently Closed.** Options data below reflects the overnight cleared book. Bid/Ask spreads may be artificially wide (or zero), leading to skewed Implied Volatility and Variance Spread calculations. Execute logic with caution.")
-    else:
-        st.success("🟢 **US Equities Market is Open.** Options pricing reflects live quoting.")
+    st.markdown("""
+    <div class="warning-box">
+        ⚠️ <b>Data Integrity Warning:</b> Standardized options data is structurally reliable <b>only for US-listed equities</b> (no suffixes) during active market hours (09:30 - 16:00 EST).<br><br>
+        <i>Queries executed outside these hours reflect the overnight cleared book. Market makers pull liquidity at the bell, resulting in artificially wide (or zeroed) Bid/Ask spreads. This will mathematically distort Implied Volatility, Slippage, and Variance Spread calculations. Execute logic with caution.</i>
+    </div>
+    """, unsafe_allow_html=True)
         
     col_t1, col_t2 = st.columns([1, 2])
-    opt_ticker = col_t1.text_input("Options Ticker", value="SPY")
+    opt_ticker = col_t1.text_input("US Options Ticker", value="SPY")
     
     dealer_mode = col_t2.radio(
         "Dealer Positioning Assumption", 
@@ -171,9 +177,8 @@ with tab4:
                     
                     c5.metric("Total Volume", f"{window_data.get('Total_Volume', 0):,.0f}", f"OI: {window_data.get('Total_OI', 0):,.0f}")
 
-                    # --- LIQUIDITY & CAPACITY CONSTRAINT WARNING ---
                     total_oi = window_data.get('Total_OI', 0)
-                    max_capacity = int(total_oi * 0.10) # 10% rule
+                    max_capacity = int(total_oi * 0.10)
                     if total_oi > 0:
                         st.info(f"⚖️ **Strategy Capacity Constraint:** Based on institutional execution limits (10% of Open Interest), the maximum recommended trade size for this expiry window is **~{max_capacity:,} contracts**. Exceeding this will likely trigger market maker defense pricing and execution slippage.")
 
@@ -240,6 +245,12 @@ with tab4:
 # --- TAB 5: WAVELET REGIME ---
 with tab5:
     st.header("Wavelet-Based Regime Detection")
+    st.markdown("""
+    <div class="info-box">
+        <b>Global Ticker Format:</b> Append exchange suffixes for international queries (e.g., <code>LSEG.L</code>). DWT Energy ratio captures hourly TWAP accumulation patterns regardless of local market timezone.
+    </div>
+    """, unsafe_allow_html=True)
+    
     st.markdown("Separates low-frequency institutional accumulation from high-frequency retail noise using DWT Energy Ratios.")
     wav_ticker = st.text_input("Asset Ticker", value="BTC-USD")
     
