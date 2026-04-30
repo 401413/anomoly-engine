@@ -270,7 +270,7 @@ class StrategyEngine:
         except Exception as e:
              return {"Error": str(e)}
 
-  # --- MODULE 5: WAVELET REGIME ---
+# --- MODULE 5: WAVELET REGIME ---
     def generate_wavelet_energy(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
