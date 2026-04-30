@@ -270,17 +270,21 @@ class StrategyEngine:
         except Exception as e:
              return {"Error": str(e)}
 
-   # --- MODULE 5: WAVELET REGIME ---
+  # --- MODULE 5: WAVELET REGIME ---
     def generate_wavelet_energy(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
             
-            # Defensive 1-hour fetch with exponential backoff for API limits
+            # Cascading Fallback: Bypasses YF limits by dropping from 730d(1h) -> 6mo(1h) -> 1y(1d)
             data = pd.DataFrame()
-            for attempt in range(3):
-                data = yf.download(clean_ticker, period="1y", interval="1h", progress=False)
+            fetch_configs = [("730d", "1h"), ("6mo", "1h"), ("1y", "1d")]
+            
+            for period, interval in fetch_configs:
+                for attempt in range(2):
+                    data = yf.download(clean_ticker, period=period, interval=interval, progress=False)
+                    if not data.empty: break
+                    time.sleep(1.5)
                 if not data.empty: break
-                time.sleep(2)
             
             if data.empty: return None, None, None
             if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
