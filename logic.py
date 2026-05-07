@@ -10,7 +10,7 @@ import time
 import requests
 
 # --- INSTITUTIONAL SCRAPING OVERRIDE ---
-# Disguises the requests to bypass Yahoo Finance API blocking for options data
+# Disguises the requests to bypass Y Finance API blocking for options data
 session = requests.Session()
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
