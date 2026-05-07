@@ -9,7 +9,8 @@ import pywt
 import time
 import requests
 
-# Create a custom requests session to bypass Yahoo Finance scraping blocks
+# --- INSTITUTIONAL SCRAPING OVERRIDE ---
+# Disguises the requests to bypass Yahoo Finance API blocking for options data
 session = requests.Session()
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -17,6 +18,7 @@ session.headers.update({
     'Accept-Language': 'en-US,en;q=0.5',
     'Connection': 'keep-alive',
 })
+
 
 class StrategyEngine:
     def __init__(self):
@@ -42,7 +44,7 @@ class StrategyEngine:
     # --- MODULE 1: PORTFOLIO ---
     def get_fund_holdings(self, fund_ticker):
         try:
-            fund = yf.Ticker(fund_ticker)
+            fund = yf.Ticker(fund_ticker, session=session)
             holdings_data = fund.funds_data.top_holdings
             clean_holdings = {}
             if holdings_data is not None:
@@ -54,7 +56,7 @@ class StrategyEngine:
     def analyze_holding_health(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0]
-            data = yf.download(clean_ticker, period="6mo", progress=False)
+            data = yf.download(clean_ticker, period="6mo", progress=False, session=session)
             if data.empty: return 0.0, 0.0, 0.0
             
             if isinstance(data.columns, pd.MultiIndex): 
@@ -102,10 +104,10 @@ class StrategyEngine:
     def generate_spectrogram_data(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
-            data = yf.download(clean_ticker, period="2y", interval="1d", progress=False)
+            data = yf.download(clean_ticker, period="2y", interval="1d", progress=False, session=session)
             
             if data.empty: 
-                data = yf.download(clean_ticker, period="max", interval="1d", progress=False)
+                data = yf.download(clean_ticker, period="max", interval="1d", progress=False, session=session)
             
             if data.empty or len(data) < 30: return None, None, None, None, None, None
 
@@ -142,10 +144,10 @@ class StrategyEngine:
 
     # --- MODULE 4: OPTIONS, BETA & GEX ---
     def _fetch_macro_vix(self):
-        for attempt in range(2): # Defensive retry logic
+        for attempt in range(2):
             try:
-                vix_1d = self.to_scalar(yf.Ticker("^VIX1D").history(period="5d")['Close'].iloc[-1]) / 100.0
-                vix_30d = self.to_scalar(yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]) / 100.0
+                vix_1d = self.to_scalar(yf.Ticker("^VIX1D", session=session).history(period="5d")['Close'].iloc[-1]) / 100.0
+                vix_30d = self.to_scalar(yf.Ticker("^VIX", session=session).history(period="5d")['Close'].iloc[-1]) / 100.0
                 return vix_1d, vix_30d
             except:
                 time.sleep(1)
@@ -153,8 +155,8 @@ class StrategyEngine:
 
     def _calculate_beta(self, ticker, period="1y"):
         try:
-            stock = yf.Ticker(ticker).history(period=period)['Close'].pct_change().dropna()
-            spy = yf.Ticker("SPY").history(period=period)['Close'].pct_change().dropna()
+            stock = yf.Ticker(ticker, session=session).history(period=period)['Close'].pct_change().dropna()
+            spy = yf.Ticker("SPY", session=session).history(period=period)['Close'].pct_change().dropna()
             data = pd.concat([stock, spy], axis=1).dropna()
             data.columns = ['Stock', 'SPY']
             cov = np.cov(data['Stock'], data['SPY'])[0][1]
@@ -233,24 +235,22 @@ class StrategyEngine:
             print(f"Chain Processing Error: {e}")
             return None
 
-def get_options_analytics(self, ticker):
+    def get_options_analytics(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
+            tk = yf.Ticker(clean_ticker, session=session) # Injecting robust session
             
-            # 1. INJECT THE CUSTOM SESSION HERE
-            tk = yf.Ticker(clean_ticker, session=session) 
-            
-            # 2. IMPLEMENT DEFENSIVE RETRY LOGIC FOR THE CHAIN
+            # --- DEFENSIVE RETRY LOOP FOR YF API BLOCKING ---
             dates = None
             for attempt in range(3):
                 try:
                     dates = tk.options
-                    if dates: break  # Success, exit loop
+                    if dates: break
                 except:
                     pass
-                time.sleep(1) # Wait 1 second before retrying
+                time.sleep(1)
                 
-            if not dates: return {"Error": "No Options Chain Found. API Blocked."}
+            if not dates: return {"Error": "No Options Chain Found. YF API Blocked or invalid ticker."}
 
             hist_5d = tk.history(period="5d")
             curr_price = self.to_scalar(hist_5d['Close'].iloc[-1]) if not hist_5d.empty else 0.0
@@ -290,38 +290,35 @@ def get_options_analytics(self, ticker):
         except Exception as e:
              return {"Error": str(e)}
 
-# --- MODULE 5: WAVELET REGIME ---
+    # --- MODULE 5: WAVELET REGIME ---
     def generate_wavelet_energy(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
             
-            # Cascading Fallback: 729d safely bypasses the strict YF 730d cutoff bug for 1h data
             data = pd.DataFrame()
             fetch_configs = [("729d", "1h"), ("6mo", "1h"), ("1y", "1d")]
             
             for period, interval in fetch_configs:
                 for attempt in range(2):
-                    data = yf.download(clean_ticker, period=period, interval=interval, progress=False)
+                    data = yf.download(clean_ticker, period=period, interval=interval, progress=False, session=session)
                     if not data.empty: break
                     time.sleep(1.0)
                 if not data.empty: break
             
             if data.empty: return None, None, None
 
-            # Defensively extract the 'Close' series regardless of YF MultiIndex scrambling
             if isinstance(data.columns, pd.MultiIndex): 
                 if 'Close' in data.columns.get_level_values(0):
                     close_col = data['Close']
                 elif 'Close' in data.columns.get_level_values(1):
                     close_col = data.xs('Close', level=1, axis=1)
                 else:
-                    close_col = data.iloc[:, 0] # Ultimate fallback
+                    close_col = data.iloc[:, 0] 
                 
                 prices = close_col.iloc[:, 0].to_numpy() if isinstance(close_col, pd.DataFrame) else close_col.to_numpy()
             else:
                 prices = data['Close'].to_numpy()
 
-            # The Wavelet transform requires a minimum array length to operate (level 4 requires >= 16 points)
             if len(prices) < 20:
                 return None, None, None
             
