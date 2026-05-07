@@ -7,18 +7,6 @@ from datetime import datetime
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import pywt
 import time
-import requests
-
-# --- INSTITUTIONAL SCRAPING OVERRIDE ---
-# Disguises the requests to bypass Y Finance API blocking for options data
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Connection': 'keep-alive',
-})
-
 
 class StrategyEngine:
     def __init__(self):
@@ -44,7 +32,7 @@ class StrategyEngine:
     # --- MODULE 1: PORTFOLIO ---
     def get_fund_holdings(self, fund_ticker):
         try:
-            fund = yf.Ticker(fund_ticker, session=session)
+            fund = yf.Ticker(fund_ticker)
             holdings_data = fund.funds_data.top_holdings
             clean_holdings = {}
             if holdings_data is not None:
@@ -56,7 +44,7 @@ class StrategyEngine:
     def analyze_holding_health(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0]
-            data = yf.download(clean_ticker, period="6mo", progress=False, session=session)
+            data = yf.download(clean_ticker, period="6mo", progress=False)
             if data.empty: return 0.0, 0.0, 0.0
             
             if isinstance(data.columns, pd.MultiIndex): 
@@ -104,10 +92,10 @@ class StrategyEngine:
     def generate_spectrogram_data(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
-            data = yf.download(clean_ticker, period="2y", interval="1d", progress=False, session=session)
+            data = yf.download(clean_ticker, period="2y", interval="1d", progress=False)
             
             if data.empty: 
-                data = yf.download(clean_ticker, period="max", interval="1d", progress=False, session=session)
+                data = yf.download(clean_ticker, period="max", interval="1d", progress=False)
             
             if data.empty or len(data) < 30: return None, None, None, None, None, None
 
@@ -146,8 +134,8 @@ class StrategyEngine:
     def _fetch_macro_vix(self):
         for attempt in range(2):
             try:
-                vix_1d = self.to_scalar(yf.Ticker("^VIX1D", session=session).history(period="5d")['Close'].iloc[-1]) / 100.0
-                vix_30d = self.to_scalar(yf.Ticker("^VIX", session=session).history(period="5d")['Close'].iloc[-1]) / 100.0
+                vix_1d = self.to_scalar(yf.Ticker("^VIX1D").history(period="5d")['Close'].iloc[-1]) / 100.0
+                vix_30d = self.to_scalar(yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]) / 100.0
                 return vix_1d, vix_30d
             except:
                 time.sleep(1)
@@ -155,8 +143,8 @@ class StrategyEngine:
 
     def _calculate_beta(self, ticker, period="1y"):
         try:
-            stock = yf.Ticker(ticker, session=session).history(period=period)['Close'].pct_change().dropna()
-            spy = yf.Ticker("SPY", session=session).history(period=period)['Close'].pct_change().dropna()
+            stock = yf.Ticker(ticker).history(period=period)['Close'].pct_change().dropna()
+            spy = yf.Ticker("SPY").history(period=period)['Close'].pct_change().dropna()
             data = pd.concat([stock, spy], axis=1).dropna()
             data.columns = ['Stock', 'SPY']
             cov = np.cov(data['Stock'], data['SPY'])[0][1]
@@ -238,9 +226,9 @@ class StrategyEngine:
     def get_options_analytics(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
-            tk = yf.Ticker(clean_ticker, session=session) # Injecting robust session
+            tk = yf.Ticker(clean_ticker)
             
-            # --- DEFENSIVE RETRY LOOP FOR YF API BLOCKING ---
+            # --- DEFENSIVE RETRY LOOP ---
             dates = None
             for attempt in range(3):
                 try:
@@ -250,7 +238,7 @@ class StrategyEngine:
                     pass
                 time.sleep(1)
                 
-            if not dates: return {"Error": "No Options Chain Found. YF API Blocked or invalid ticker."}
+            if not dates: return {"Error": "No Options Chain Found. Upstream beta data feed unavailable or invalid ticker."}
 
             hist_5d = tk.history(period="5d")
             curr_price = self.to_scalar(hist_5d['Close'].iloc[-1]) if not hist_5d.empty else 0.0
@@ -300,7 +288,7 @@ class StrategyEngine:
             
             for period, interval in fetch_configs:
                 for attempt in range(2):
-                    data = yf.download(clean_ticker, period=period, interval=interval, progress=False, session=session)
+                    data = yf.download(clean_ticker, period=period, interval=interval, progress=False)
                     if not data.empty: break
                     time.sleep(1.0)
                 if not data.empty: break
