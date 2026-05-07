@@ -23,7 +23,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Portfolio", "🎙️ Sentiment", "
 # --- TAB 1: PORTFOLIO ---
 with tab1:
     st.header("Reflexivity Filter")
-    st.info("**Exchange Suffix Guide:** US Equities require no suffix (e.g., `AAPL`). For international markets, append the Yahoo Finance exchange suffix (e.g., London: `.L`, Xetra: `.DE`, Hong Kong: `.HK`).")
+    st.info("**Exchange Suffix Guide:** US Equities require no suffix (e.g., `AAPL`). For international markets, append the exchange suffix (e.g., London: `.L`, Xetra: `.DE`, Hong Kong: `.HK`).")
     
     target_fund = st.text_input("UCITS Ticker", value="ICLN")
     if st.button("Run Scan"):
