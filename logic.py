@@ -7,6 +7,16 @@ from datetime import datetime
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import pywt
 import time
+import requests
+
+# Create a custom requests session to bypass Yahoo Finance scraping blocks
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Connection': 'keep-alive',
+})
 
 class StrategyEngine:
     def __init__(self):
@@ -223,14 +233,24 @@ class StrategyEngine:
             print(f"Chain Processing Error: {e}")
             return None
 
-    def get_options_analytics(self, ticker):
+def get_options_analytics(self, ticker):
         try:
             clean_ticker = ticker.split(" ")[0].upper()
-            tk = yf.Ticker(clean_ticker)
             
-            try: dates = tk.options
-            except: dates = None
-            if not dates: return {"Error": "No Options Chain Found."}
+            # 1. INJECT THE CUSTOM SESSION HERE
+            tk = yf.Ticker(clean_ticker, session=session) 
+            
+            # 2. IMPLEMENT DEFENSIVE RETRY LOGIC FOR THE CHAIN
+            dates = None
+            for attempt in range(3):
+                try:
+                    dates = tk.options
+                    if dates: break  # Success, exit loop
+                except:
+                    pass
+                time.sleep(1) # Wait 1 second before retrying
+                
+            if not dates: return {"Error": "No Options Chain Found. API Blocked."}
 
             hist_5d = tk.history(period="5d")
             curr_price = self.to_scalar(hist_5d['Close'].iloc[-1]) if not hist_5d.empty else 0.0
