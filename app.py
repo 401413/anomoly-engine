@@ -232,7 +232,7 @@ with tab5:
     wav_ticker = st.text_input("Asset Ticker", value="SPY")
     
     if st.button("Calculate DWT Energy"):
-        with st.spinner("Processing 1-hour intervals..."):
+        with st.spinner("Processing intervals..."):
             dates, prices, energy_ratio = engine.generate_wavelet_energy(wav_ticker)
             if dates is not None:
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.5, 0.5], vertical_spacing=0.05)
